@@ -1,0 +1,72 @@
+#! /usr/bin/env python
+import sys,getopt
+##filterbgl4_vcf.py
+##filters a blg4 output vcf, outputs SNPs with proper mendelian ratios, 
+##output vcf is one offspring, both parents
+##options:
+    ##-f fathe index
+    ##-m mother index
+    ##-c child index
+    ##-v in vcf
+    
+args = sys.argv
+optlist,args = getopt.getopt(args[1:],'f:m:c:')
+FATHER_INDEX = 3
+MOTHER_INDEX = 4
+CHILD_INDEX = 0
+INVCF = '/data/James/AlleleSpecificExpression/PAXB_BS/PAXB_BS_v4.vcf'
+for a in optlist:
+    if a[0] == '-f':
+        FATHER_INDEX = int(a[1])
+    if a[0] == '-m':
+        MOTHER_INDEX = int(a[1])
+    if a[0] == '-c':
+        CHILD_INDEX = int(a[1])
+    if a[0] == '-v':
+        INVCF = a[1]
+        
+        
+##filters a vcf to only the given individuals, only where fixed differences exist and are het
+def filter_fixed(vcf_fpath):
+    
+    f = open(vcf_fpath,'r')
+    phasing_error = 0
+    opposing_fixed = 0
+    for line in f:
+        line = line.strip()
+        if line.startswith('##'):
+            continue
+        split = line.split('\t')
+        if line.startswith('#'):
+            header = split[:9]
+            names = split[9:]
+            header = header + [names[CHILD_INDEX],names[FATHER_INDEX],names[MOTHER_INDEX]]
+            print '\t'.join(header)
+            continue
+        
+        ##info is the rest of the vcf
+        info = split[:9]
+        ##raw gts contain genotypes, get the genotype for each
+        raw_gts = split[9:]
+        child_gt = raw_gts[CHILD_INDEX].split(':')[0]
+        father_gt = raw_gts[FATHER_INDEX].split(':')[0]
+        mother_gt = raw_gts[MOTHER_INDEX].split(':')[0]
+        
+        ##if opposite fixed in parents
+        if (father_gt == '0|0' and mother_gt== '1|1') or (father_gt == '1|1' and mother_gt== '0|0') :
+            opposing_fixed +=1
+            if child_gt == '0|1' or child_gt == '1|0':
+                info = info + [raw_gts[CHILD_INDEX],raw_gts[FATHER_INDEX],raw_gts[MOTHER_INDEX]]
+                print '\t'.join(info)
+            else:
+                phasing_error += 1
+                
+                
+    print >> sys.stderr, 'opposing_fixed: ', opposing_fixed, 'phasing_error: ', phasing_error
+                
+                
+filter_fixed(INVCF)            
+        
+
+
+

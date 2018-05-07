@@ -1,0 +1,2560 @@
+Allele Specific Expression
+
+Goal:  Determine genes which display allele specific expression in the toothplate
+
+General Overview:
+
+QualTrim Reads (fill with Ns in quality is below a given threshold)
+
+Align Reads with bowtie2
+
+TOPHAT
+
+Cufflinks
+
+/usr/local/include/eigen-eigen-2249f9c22fe8/Eigen
+/usr/local/include/boost
+sudo ./bjam --prefix=/usr/local --toolset=gcc architecture=x86 link=static runtime-link=static stage install
+
+
+building this is difficult
+
+First, build a bowtie2 index:
+
+##bowtie2-build stickleMasked.fa stickleMasked &
+
+Next, align RNA-seq reads with TOPHAT
+
+tophat --read-edit-dist 4 --read-realign-edit-dist 0 -m 1 --coverage-search stickleMasked <reads1_1[,...,readsN_1]> [reads1_2,...
+
+cufflinks -g ensGene.gtf -u -b /home/cmiller/ReferenceGenomes/SickleMasked/stickleMasked.fa -v <hits.sam>
+
+Use transcripts.gtf to generate a multi-fasta file of transcript
+
+express -B 2 <targets.fa> <out.bam>
+
+also consider cuffdiff
+
+
+6/18/13
+######################################################################
+General Pipeline for ASE
+######################################################################
+
+
+Call Variants from parental genomes_____________________________________
+
+Write callBamVariants.py
+
+PCAG07	Nextera DNAseq	FTC mom of CF RNAseq
+PCAG08	Nextera DNAseq	LITC dad of CF RNAseq
+
+~/Scripts/callBamVariants.py -w wc.txt -p PCAG7 PCAG7_final.bam &
+~/Scripts/callBamVariants.py -w wc.txt -p PCAG8 PCAG8_final.bam &
+
+java -Xmx8g -Djava.io.tmpdir=strach/ -jar ~/Programs/GenomeAnalysisTK-2.4-3-g2a7af43/GenomeAnalysisTK.jar -l INFO -R ~/ReferenceGenomes/StickleMasked/stickleMasked.fa -T UnifiedGenotyper -I PCAG7_final.bam -I PCAG8_final.bam -o PCAG7_8_unified.vcf &
+
+
+
+Create new reference genome_________________________________________________________
+
+ with all snp variant positions replaced with 'N' (no bias if both wrong/right)
+
+~/Scripts/maskVariants.py /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa PCAG7_8_unified.vcf > PCAG7_PCAG8_masked_ref.fa
+
+Index Reference Genome___________________________________________________________
+
+bowtie2-build PCAG7_PCAG8_masked_ref.fa PCAG7_PCAG8_masked_ref &
+
+Map reads with tophat_______________________________________________________________
+
+(bowtie2 wrapper)  Might not want to give it a transcriptome.gtf file?
+
+tophat --read-mismatches 3 --read-edit-dist 3 --read-realign-edit-dist 0 --coverage-serach --library-type fr-unstranded --b2-sensitive -G ensGenes.gtf PCAG7_PCAG8_masked_ref reads.fastq
+
+Pileup reads with mpileup into vcf___________________________________________________
+
+samtools mpileup -B -f /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -q 10 -u ALN.bam | bcftools view -bvcg - | vcfutils.pl varFilter -D200 > out.vcf 
+
+Filter the VCF files_____________________________________________________________
+
+
+
+
+what does this get us when 20 reads pile up?
+
+Ask coverage at variant positions in .bam files (just run mpileup, count fwd/rev)
+
+http://www.ncbi.nlm.nih.gov/pmc/articles/PMC3401465/
+
+Pileup SNPs, not indels__________________________________
+
+
+samtools mpileup -uBf /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -q 10 LITCxFTC_20dpfGAB_BR1_clipped_sorted.bam LITCxFTC_20dpfGAB_BR2_clipped_sorted.bam LITCxFTC_20dpfGAB_BR3_clipped_sorted.bam | bcftools view -vcg - | vcfutils.pl varFilter -D200 > LITCxFTC_BR123.vcf 
+
+samtools mpileup -uBIf /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -q 10 LITCxFTC_20dpfGAB_BR1_clipped_sorted.bam | bcftools view -vcg - | vcfutils.pl varFilter -D200 > LITCxFTC_BR1.vcf &
+
+samtools mpileup -uBIf /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -q 10  LITCxFTC_20dpfGAB_BR2_clipped_sorted.bam | bcftools view -vcg - | vcfutils.pl varFilter -D200 > LITCxFTC_BR2.vcf &
+
+samtools mpileup -uBIf /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -q 10 LITCxFTC_20dpfGAB_BR3_clipped_sorted.bam | bcftools view -vcg - | vcfutils.pl varFilter -D200 > LITCxFTC_BR3.vcf &
+
+Next, filter each VCF so that each vcf contains the exact same set of overlapping variants
+
+wc *.vcf
+
+   307911   3079021  35486709 LITCxFTC_BR1.vcf
+   284102   2840931  32641960 LITCxFTC_BR2.vcf
+   272303   2722941  31253819 LITCxFTC_BR3.vcf
+
+
+
+intersectBed -a LITCxFTC_BR1.vcf -b LITCxFTC_BR2.vcf -u | intersectBed -a stdin -b LITCxFTC_BR3.vcf -u > LITCxFTC_BR1_filtered.vcf &
+intersectBed -a LITCxFTC_BR2.vcf -b LITCxFTC_BR1.vcf -u | intersectBed -a stdin -b LITCxFTC_BR3.vcf -u > LITCxFTC_BR2_filtered.vcf &
+intersectBed -a LITCxFTC_BR3.vcf -b LITCxFTC_BR1.vcf -u | intersectBed -a stdin -b LITCxFTC_BR2.vcf -u > LITCxFTC_BR3_filtered.vcf &
+
+wc *filtered.vcf
+   92539   925390 10869304 LITCxFTC_BR1_filtered.vcf
+   92539   925390 10800991 LITCxFTC_BR2_filtered.vcf
+   92539   925390 10793033 LITCxFTC_BR3_filtered.vcf
+  277617  2776170 32463328 total
+
+~33% of SNPs shared between all fish
+
+Most SNPs homozygous
+
+grep '0/1' LITCxFTC_BR1_filtered.vcf | wc
+  44467  444670 5689228
+grep '0/1' LITCxFTC_BR2_filtered.vcf | wc
+  42634  426340 5442912
+grep '0/1' LITCxFTC_BR3_filtered.vcf | wc
+  42145  421450 5380816
+
+Filter for SNPs that are hets in all three fish
+
+grep '0/1' LITCxFTC_BR1.vcf > LITCxFTC_BR1_het.vcf
+grep '0/1' LITCxFTC_BR2.vcf > LITCxFTC_BR2_het.vcf
+grep '0/1' LITCxFTC_BR3.vcf > LITCxFTC_BR3_het.vcf
+
+intersectBed -a LITCxFTC_BR1_het.vcf -b LITCxFTC_BR2_het.vcf -u | intersectBed -a stdin -b LITCxFTC_BR3_het.vcf -u > LITCxFTC_BR1_het_filtered.vcf 
+intersectBed -a LITCxFTC_BR2_het.vcf -b LITCxFTC_BR1_het.vcf -u | intersectBed -a stdin -b LITCxFTC_BR3_het.vcf -u > LITCxFTC_BR2_het_filtered.vcf 
+intersectBed -a LITCxFTC_BR3_het.vcf -b LITCxFTC_BR1_het.vcf -u | intersectBed -a stdin -b LITCxFTC_BR2_het.vcf -u > LITCxFTC_BR3_het_filtered.vcf 
+
+wc *.vcf
+   604831   7257831  91245070 LITCxFTC_BR123.vcf
+    92539    925390  10869304 LITCxFTC_BR1_filtered.vcf
+    32393    323930   4150178 LITCxFTC_BR1_het_filtered.vcf
+   144767   1447670  18339912 LITCxFTC_BR1_het.vcf
+   307911   3079021  35486709 LITCxFTC_BR1.vcf
+    92539    925390  10800991 LITCxFTC_BR2_filtered.vcf
+    32393    323930   4139223 LITCxFTC_BR2_het_filtered.vcf
+   129719   1297190  16432025 LITCxFTC_BR2_het.vcf
+   284102   2840931  32641960 LITCxFTC_BR2.vcf
+    92539    925390  10793033 LITCxFTC_BR3_filtered.vcf
+    32393    323930   4139604 LITCxFTC_BR3_het_filtered.vcf
+   122294   1222940  15489777 LITCxFTC_BR3_het.vcf
+   272303   2722941  31253819 LITCxFTC_BR3.vcf
+  2240723  23616484 285781605 total
+
+32,393 Heterozygous positions between the 3 datasets.  Further filter based on parental genotype
+
+Test for allele-specific expression_____________________________________________________________
+
+
+Correct for CNV?
+
+Use Chi-squared-Goodness-of-fit test
+
+Is FET useable as well?  
+
+For each transcript:
+
+3 independant samples.  Ask not if reads are different in each sample, but if the differences between LITC/FTC are greater than the differences seen among each population.
+
+ANOVA?  
+t test?
+
+Two nominal (M/F), 1,2,3 and one measurement (read counts)
+
+t-test will work for this (we can assume that read counts across biological replicates will follow a normal distribution)
+
+Paired t-test will work better
+
+t = (X_d - u_0)/(s_d/n^.5) where X_d is the mean of the differences between pairs and s_d is the stddev
+
+
+null u_0 = 0, the mean difference between the two samples is 0
+
+n = 3, 3 different samples, with n-1 = 2 df
+
+for p = .05 (2df), t > 2.92
+
+X_d / s_d > 5.06
+
+Can we scale stddev with read count?   How do we correct for this?
+Normalize read counts to fraction of total reads?
+
+alleleBias.py test1.vcf test2.vcf test3.vcf > pvals.vcf
+
+alleleBias.py LITCxFTC_BR1_het_filtered.vcf LITCxFTC_BR2_het_filtered.vcf LITCxFTC_BR3_het_filtered.vcf > pvals.vcf
+
+wc pvals.vcf 
+  2622  28842 373461 pvals.vcf
+
+2,622 significant allele-specific expression differences across all 3 replicates
+
+11 transcripts/ 15 vars within the toothQTL
+
+grep chrXXI ASEgenes.bed | intersectBed -a stdin -b ToothQTl.bed -u 
+
+grep ENSGACT00000002385 ENS_id_name.txt
+grep ENSGACT00000002594 ENS_id_name.txt
+grep ENSGACT00000002673 ENS_id_name.txt
+grep ENSGACT00000002837 ENS_id_name.txt
+grep ENSGACT00000002397 ENS_id_name.txt
+grep ENSGACT00000002446 ENS_id_name.txt
+grep ENSGACT00000002560 ENS_id_name.txt
+grep ENSGACT00000002564 ENS_id_name.txt
+grep ENSGACT00000002661 ENS_id_name.txt
+grep ENSGACT00000002744 ENS_id_name.txt
+
+IDI2 -     Catalyzes isopentenyl (IPP) to its allylic isomer, dimethylallyl diphosphate (DMAPP)
+PRKDC - DNA-dependent protein kinase (DNA-PK), ds break repair with Ku70/80
+RNPC3 - U12-type spliceosome.  U12-type introns <1% of human introns
+PABPN1 -  abundant nuclear protein that binds with high affinity to nascent poly(A) tails
+CPNE3 - Ca2+ membrane binding protein
+---
+DPH2 - Diphthamide Biosynthesis Protein 22
+NCF2 - neutrophil cytosolic factor 2, creates superoxidase
+COL11A1 - collagen, also has coding mutations??? - stickler syndrome
+---
+
+Look for transcripts where one allele is different than another (same gene, different processing)
+
+Caution:  In the cDNA library construction, is strand-specificity lost?  It seems so, but have to follow
+the protocol a bit more.  By looking at read pileup + skimming, seems to be so
+
+Two ideas:
+
+1) use all variants within a gene as multiple samples of that transcript - instead of a series of ind trials
+
+2) Normalize read counts into read proportions
+
+Normalized Read Counts:
+
+alleleBias.py LITCxFTC_BR1_het_filtered.vcf LITCxFTC_BR2_het_filtered.vcf LITCxFTC_BR3_het_filtered.vcf > normpvals.vcf
+
+More alleles come out, but is this significant?
+
+use fraction of reads instead
+
+Get FPKP from cufflinks?  Unrelated
+
+#########################################################################################################
+Run the pipeline, correcting for RefSeq Bias__________________________________________________________
+
+First, Make a new refseq with variants corrected to 'N'
+
+##~/Scripts/maskVariants.py /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa PCAG7_8_unified.vcf PCAG7_8_unified.vcf > PCAG7_8_corrected.fa &
+
+wc sticklemasked - 472621722
+wc corrected.fa -  468431303
+
+But I have only one line/chrome, should be fine...
+
+Align Reads to the new reference (hopefully coordinates are the same, need a way to test this)
+
+##bowtie2-build PCAG7_8_corrected.fa PCAG7_PCAG8_corrected &
+
+tophat -o LF_BR1 --read-mismatches 3 --read-edit-dist 3 --read-realign-edit-dist 0 --coverage-search --b2-sensitive -G ensGene.gtf PCAG7_PCAG8_corrected LITCxFTC_20dpfGAB_BR1_clipped.fastq &
+
+tophat -o LF_BR2 --read-mismatches 3 --read-edit-dist 3 --read-realign-edit-dist 0 --coverage-search --b2-sensitive -G ensGene.gtf PCAG7_PCAG8_corrected LITCxFTC_20dpfGAB_BR2_clipped.fastq &
+
+tophat -o LF_BR3 --read-mismatches 3 --read-edit-dist 3 --read-realign-edit-dist 0 --coverage-search --b2-sensitive -G ensGene.gtf PCAG7_PCAG8_corrected LITCxFTC_20dpfGAB_BR3_clipped.fastq &
+
+
+7/5/13 - re-run pipeline:_________________________________________________________________________________________________________
+##~/Scripts/maskVariants.py /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa PCAG7_8_unified.vcf PCAG7_8_unified.vcf > PCAG7_8_masked.fa &
+size matched perfectly
+
+bowtie2-build PCAG7_8_masked.fa PCAG7_PCAG8_masked
+
+tophat -o LF_BR1 --read-mismatches 3 --read-edit-dist 3 --read-realign-edit-dist 0 --coverage-search --b2-sensitive -G ensGene.gtf PCAG7_PCAG8_masked LITCxFTC_20dpfGAB_BR1_clipped.fastq &
+
+tophat -o LF_BR2 --read-mismatches 3 --read-edit-dist 3 --read-realign-edit-dist 0 --coverage-search --b2-sensitive -G ensGene.gtf PCAG7_PCAG8_masked LITCxFTC_20dpfGAB_BR2_clipped.fastq &
+
+tophat -o LF_BR3 --read-mismatches 3 --read-edit-dist 3 --read-realign-edit-dist 0 --coverage-search --b2-sensitive -G ensGene.gtf PCAG7_PCAG8_masked LITCxFTC_20dpfGAB_BR3_clipped.fastq 
+
+samtools mpileup -uBIf /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -q 10 LF_BR1/accepted_hits.bam | bcftools view -vcg - | vcfutils.pl varFilter -D200 > LITCxFTC_BR1.vcf &
+
+samtools mpileup -uBIf /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -q 10  LF_BR2/accepted_hits.bam | bcftools view -vcg - | vcfutils.pl varFilter -D200 > LITCxFTC_BR2.vcf &
+
+samtools mpileup -uBIf /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -q 10 LF_BR3/accepted_hits.bam | bcftools view -vcg - | vcfutils.pl varFilter -D200 > LITCxFTC_BR3.vcf 
+
+!!!!!Write script to automate this
+
+Build a reference Transcriptome_______________________________
+
+cufflinks -g ensGene.gtf -u -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -o LF_cuff_BR1 -v LF_BR1/accepted_hits.bam &
+
+cufflinks -g ensGene.gtf -u -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -o LF_cuff_BR2 -v LF_BR2/accepted_hits.bam &
+
+cufflinks -g ensGene.gtf -u -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -o LF_cuff_BR3  -v LF_BR3/accepted_hits.bam &
+
+GO analysis_________________________________________________
+
+First pass at ASE go:
+~/Scripts/makeGO.py ASEgenes.bed bioMartGO.tsv > ASEgenes.go
+~/Scripts/compareGO.py ASEgenes.go ensGene.go .05 > ASE_sigGO.txt
+
+Cherrypicking terms of interest:
+
+protein unfolding p<10^-10
+Collagen p<10^-8
+Ammonium transport (and transmembrane transport) P<10^-5
+Splicing via spliceosome
+Rho-GTPase
+Cation Transport
+Na+/K+ ATPase
+Skeletal/muscle tissue dev
+medial fin morphogenesis
+Lots of ion transport
+No signaling p<.05 (except PKC)
+
+CSS___________________________________________________________
+Got file CSS_HMM_Union.bed (CSS from paper)
+
+Expand each by 10kb in each direction
+
+slopBed -b 5000 -i CSS_HMM_Union.bed -g /home/ctmiller/ReferenceGenomes/stickleback.genome | intersectBed -a ASEgenes.bed -b stdin -u > ASE_CSS_intersection.bed
+~/Scripts/makeGO.py ASE_CSS_intersection.bed bioMartGO.tsv > ASE_CSS_intersection.go
+~/Scripts/compareGO.py ASE_CSS_intersection.go ensGene.go > ASE_CSS_sigGO.txt
+wc - 58     283    2881
+
+
+slopBed -b 5000 -i CSS_HMM_Union.bed -g /home/ctmiller/ReferenceGenomes/stickleback.genome | intersectBed -a BS_transcripts.bed -b stdin -u > BS_CSS_intersection.bed
+~/Scripts/makeGO.py BS_CSS_intersection.bed bioMartGO.tsv > BS_CSS_intersection.go
+
+
+
+~/Scripts/compareGO.py -h -p .05 ASE_CSS_intersection.go BS_CSS_intersection.go > ASE_CSS_BS_sigGO.txt
+
+intersectBed -a ASE_CF_genes.bed -b CSS_HMM_Union_B1000.bed -u | wc
+     30     270    2824
+
+wc ASE_CF_genes.bed 
+  1356  12204 127654 ASE_CF_genes.bed
+
+~/Scripts/sizeBed.py CSS_HMM_Union_B1000.bed 
+2910129
+
+2910129/460000000 = .00632636739
+
+.00632636739 * 1356 = 8.57855418084
+
+If we assume ASE genes are poisson distributed, over the size of SoS we expect lambda = 8.58
+
+p(X>=30) = 1- (sum from x = 0 to 29 {8.58^x/x! * e^-8.58} ) = 1 -  9.85269×10^(-9) ~~10^-8
+
+
+ToothQTL
+
+intersectBed -a ASE_CF_genes.bed -b ToothQTl.bed -u | wc
+     14     126    1316
+~/Scripts/sizeBed.py ToothQTl.bed 
+2485448
+
+Expect   2485448/460000000 * 1356 = 7.32666845217
+Observe 14
+
+P(X>=14) = 1- ( sum from x=0 to 13 {7.32^x/x! * e^-7.32} ) = 0.0180108
+
+intersectBed -a ASE_CF_genes.bed -b RakerQTL20.bed -u | wc
+52     468    4896
+
+~/Scripts/sizeBed.py RakerQTL20.bed
+7413040	
+
+Expect 7413040/460000000 * 1356 = 21.8523526957
+Observe = 52
+
+P(X>=52) = 1- (sum from x = 0 to 51 {21.85^x/x! * e^-21.85})
+
+3.03817x10^-8
+
+
+
+rawFPKM to genes_________________________________________________________________________________
+Input: a 
+################################################################################
+ASE from new .bam####################################### files_________________________________________________________________________________________________________________________
+#################################################################################################
+##samtools mpileup -uBIf /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -q 10 LF_BR1/accepted_hits.bam | bcftools view -vcg - | vcfutils.pl varFilter -D200 > LITCxFTC_BR1.vcf &
+
+##samtools mpileup -uBIf /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -q 10  LF_BR2/accepted_hits.bam | bcftools view -vcg - | vcfutils.pl varFilter -D200 > LITCxFTC_BR2.vcf &
+
+##samtools mpileup -uBIf /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -q 10 LF_BR3/accepted_hits.bam | bcftools view -vcg - | vcfutils.pl varFilter -D200 > LITCxFTC_BR3.vcf 
+
+
+##grep '0/1' LITCxFTC_BR1.vcf > LITCxFTC_BR1_het.vcf
+##grep '0/1' LITCxFTC_BR2.vcf > LITCxFTC_BR2_het.vcf
+##grep '0/1' LITCxFTC_BR3.vcf > LITCxFTC_BR3_het.vcf
+
+##intersectBed -a LITCxFTC_BR1_het.vcf -b LITCxFTC_BR2_het.vcf -u | intersectBed -a stdin -b LITCxFTC_BR3_het.vcf -u > LITCxFTC_BR1_het_filtered.vcf 
+##intersectBed -a LITCxFTC_BR2_het.vcf -b LITCxFTC_BR1_het.vcf -u | intersectBed -a stdin -b LITCxFTC_BR3_het.vcf -u > LITCxFTC_BR2_het_filtered.vcf 
+##intersectBed -a LITCxFTC_BR3_het.vcf -b LITCxFTC_BR1_het.vcf -u | intersectBed -a stdin -b LITCxFTC_BR2_het.vcf -u > LITCxFTC_BR3_het_filtered.vcf 
+
+##alleleBias.py LITCxFTC_BR1_het_filtered.vcf LITCxFTC_BR2_het_filtered.vcf LITCxFTC_BR3_het_filtered.vcf > normASE.vcf
+
+
+
+intersectBed -a ensGene.bed -b normASE.vcf -u | wc
+   1356   12204  127654
+
+intersectBed -a ensGene.bed -b normASE.vcf -u > ASE_CF_genes.bed
+
+~/Scripts/makeGO.py ASE_CF_genes.bed bioMartGO.tsv > ASE_CF_genes.go
+~/Scripts/compareGO.py -p .05 ASE_CF_genes.go ensGene.go .05 > ASE_CF_sigGO.txt
+
+Wrote scripts phaseASE.py, takes pval vcf and comb parental vcf
+
+!!!!!!!Check that the masked reference is correct - maybe align a simple file 
+!!!!!!!Something's not right here - 5k ASE SNPs, only 500 ASE genes.....
+
+
+
+
+Notes CF meeting 7/3/13
+
+Paired t-test is the same as a one sample t-test?  Should be appropiate
+Look at fischer's as well (per sample, pool samples later)
+Several Levels of statistical significance
+No strand bias
+Look for read position bias (expect a uniform distribution, throw out if different from)
+Phase SNPs - combine for extra power (reads per gene as opposed to reads per snp)
+also look into splicing isoforms.  However, ignore if cufflinks doesn't reveal a splicing isoform at that snp
+
+Lets use FDR over P-values, much more appropiate
+p-values for small samples
+
+FDR = E(V/R), where V is False Positive Rate and R is total null hypothesis rejected
+
+
+TODO:  Sign expression data - which isoform is expressed at a higher level?  Within a GO term, is there fluctuation?
+Phase SNPs - bin reads into ENSG transcripts.  If > 1 het per transcript, adds power.  Hets wouldn't need to be shared accross the dataset.  Next-gen, after lab meeting
+
+
+7/15/13
+Talked to Shannon about Adam (who is has graduated and is on his way out).  He is writing a paper on ASE and RNA editing using eXpress, might been done and/or soon to be done?
+
+
+7/23/13 - make excell file of ASE genes (though my method kinda sucks right now)
+
+cut -f 1,2,3,6 ASE_CF_genes.bed | mergeBed -i stdin -nms -d 1000 > ASE_CF_genes_merged.bed
+cut -d \" -f 2 ASE_CF_genes_merged.bed | ~/Scripts/ensIDtoName.py > ASE_CF_genes.txt
+cut -f 1,2,3 ASE_CF_genes_merged.bed |  paste -  ASE_CF_genes.txt > ASE_CF_genes
+
+
+ wc ASE_CF_genes
+  831  3324 28870 ASE_CF_genes
+
+
+
+GeneName	chr	start	end	FPKM	pval(signed??)
+
+
+
+##################################################################################################################################
+                             ########################################################################################################## 
+eXpress and ASE              ###################################################################################################
+                             ##########################################################################################################
+#######################################################################################################################################
+
+
+
+eXpress now allows for ASE, lets take advantage
+
+-H/--haplotype-file <string> 	Specifies the location of a comma-separated file of pairs of target IDs (one pair per line) specifying which targets represent multiple haplotypes of a single feature (ie, transcript). Useful for allele-specific expression. 
+
+Downloaded ensGenes.fasta from UCSC (from uploading ensGenes.gtf, downloading seq track)
+
+Can I phase parents based on offspring?
+
+http://faculty.washington.edu/browning/beagle/beagle.html
+
+Use Beagle!
+
+Nah, use GATK
+
+http://www.broadinstitute.org/gatk/gatkdocs/org_broadinstitute_sting_gatk_walkers_phasing_PhaseByTransmission.html
+
+<contents of basic.ped>
+1   1   0  0  1
+1   2   0  0  2
+1   3   0  0  1
+1   4   1  2  2
+1   5   3  4  2
+1   6   3  4  1
+<end of basic.ped>
+
+VCF in format F(D, Mom in CF)	M(mom, dad in CF)	C1	C2	C3
+
+!!!!!!!!!!!!!Need to replace read groups in hits from bowtie
+
+##java -Djava.io.tmpdir=strach/ -jar ~/Programs/picard-tools-1.51/AddOrReplaceReadGroups.jar I=LF_BR1/accepted_hits.bam O=LF_BR1_final.bam LB==LF_BR1 PL=illumina SM==LF_BR1 PU==LF_BR1 &
+
+##java -Djava.io.tmpdir=strach/ -jar ~/Programs/picard-tools-1.51/AddOrReplaceReadGroups.jar I=LF_BR2/accepted_hits.bam O=LF_BR2_final.bam LB==LF_BR2 PL=illumina SM==LF_BR2 PU==LF_BR2 &
+
+##java -Djava.io.tmpdir=strach/ -jar ~/Programs/picard-tools-1.51/AddOrReplaceReadGroups.jar I=LF_BR3/accepted_hits.bam O=LF_BR3_final.bam LB==LF_BR3 PL=illumina SM==LF_BR3 PU==LF_BR3 &
+
+##samtools index LF_BR1_final.bam &
+##samtools index LF_BR2_final.bam &
+##samtools index LF_BR3_final.bam &
+
+java -Xmx8g -Djava.io.tmpdir=strach/ -jar ~/Programs/GenomeAnalysisTK-2.4-3-g2a7af43/GenomeAnalysisTK.jar -l INFO -R ~/ReferenceGenomes/StickleMasked/stickleMasked.fa -T UnifiedGenotyper -I PCAG8_final.bam -I PCAG7_final.bam -I LF_BR1_final.bam -I LF_BR2_final.bam -I LF_BR3_final.bam  -o LITCxFTC_unified.vcf &
+
+
+CF.ped
+1	1	0	0	2
+1	2	0	0	1
+1	3	1	2	2
+1	4	1	2	2
+1	5	1	2	2
+
+
+The PED file is a white-space (space or tab) delimited file: the first six columns are mandatory:
+
+     Family ID
+     Individual ID
+     Paternal ID
+     Maternal ID
+     Sex (1=male; 2=female; other=unknown)
+     Phenotype
+
+
+java -Xmx2g -jar GenomeAnalysisTK.jar -R ~/ReferenceGenomes/StickleMasked/stickleMasked.fa -T PhaseByTransmission -V LITCxFTC_unified.vcf -ped CF.ped -o LITCxFTC_unified_phased.vcf &
+
+
+PROBLEM:
+Different base quality scores, phred 33+ vs phred 63+.  Call seperatley and merge?  output every position in one, and only the confident in others.  Intersection should reveal all.
+
+##java -Xmx8g -Djava.io.tmpdir=strach/ -jar ~/Programs/GenomeAnalysisTK-2.4-3-g2a7af43/GenomeAnalysisTK.jar -l INFO -R ~/ReferenceGenomes/StickleMasked/stickleMasked.fa -T UnifiedGenotyper -I PCAG8_final.bam -I PCAG7_final.bam  -o LITCxFTC_PCAG7_8.vcf &
+
+##java -Xmx8g -Djava.io.tmpdir=strach/ -jar ~/Programs/GenomeAnalysisTK-2.4-3-g2a7af43/GenomeAnalysisTK.jar -fixMisencodedQuals -l INFO -R ~/ReferenceGenomes/StickleMasked/stickleMasked.fa -T UnifiedGenotyper -I LF_BR1_final.bam -I LF_BR2_final.bam -I LF_BR3_final.bam  -o LITCxFTC_BR123.vcf &
+
+
+##head -n 53 LITCxFTC_BR123.vcf > header.h
+
+##intersectBed -b LITCxFTC_BR123.vcf -a LITCxFTC_PCAG7_8.vcf -u > Parents.geno
+##intersectBed -a LITCxFTC_BR123.vcf -b LITCxFTC_PCAG7_8.vcf -u | cut -f 10,11,12 - > Progeny.geno
+
+##paste Parents.geno Progeny.geno| cat header.h - > LITCxFTC_Unified.vcf
+
+!!Remove missing/triallelic.  Why can't GATK do this, why why why
+
+
+##grep '\./\.' LITCxFTC_Unified.vcf > LITCxFTC_missing.vcf
+##grep -E '2/|/2' LITCxFTC_Unified.vcf | cat LITCxFTC_missing.vcf - | intersectBed -a LITCxFTC_Unified.vcf -b stdin -v | cat header.h - > LITCxFTC_Unified_Present.vcf   (manually fixed header line)
+
+##re-write cut line, cut and filter (no missing anywhere) into BR123
+
+##cut -f 1,2,3,4,5,6,7,8,9,10,11,12 LITCxFTC_Unified_Present.vcf > LITCxFTC_Parents_BR1.vcf
+##cut -f 1,2,3,4,5,6,7,8,9,10,11,13 LITCxFTC_Unified_Present.vcf > LITCxFTC_Parents_BR2.vcf
+##cut -f 1,2,3,4,5,6,7,8,9,10,11,14 LITCxFTC_Unified_Present.vcf > LITCxFTC_Parents_BR3.vcf
+
+##write .ped files
+
+
+##java -Xmx2g -jar ~/Programs/GenomeAnalysisTK-2.4-3-g2a7af43/GenomeAnalysisTK.jar -R ~/ReferenceGenomes/StickleMasked/stickleMasked.fa -T PhaseByTransmission -V LITCxFTC_Parents_BR1.vcf -ped CF1.ped -o LITCxFTC_Parents_BR1_phased.vcf &
+
+##java -Xmx2g -jar ~/Programs/GenomeAnalysisTK-2.4-3-g2a7af43/GenomeAnalysisTK.jar -R ~/ReferenceGenomes/StickleMasked/stickleMasked.fa -T PhaseByTransmission -V LITCxFTC_Parents_BR2.vcf -ped CF2.ped -o LITCxFTC_Parents_BR2_phased.vcf &
+
+##java -Xmx2g -jar ~/Programs/GenomeAnalysisTK-2.4-3-g2a7af43/GenomeAnalysisTK.jar -R ~/ReferenceGenomes/StickleMasked/stickleMasked.fa -T PhaseByTransmission -V LITCxFTC_Parents_BR3.vcf -ped CF3.ped -o LITCxFTC_Parents_BR3_phased.vcf &
+
+
+
+Need to filter for truely phased haplotypes
+
+BAMs -> PhasedVCF
+
+INPUT: 2 + 3 BAM files (), in the form FRESH.bam MARINE.bam BR1.bam BR2.bam BR3.bam.  BAM names are in the form PREFIX_final.bam
+  -p [str] PREFIX: prefix
+
+java -Xmx8g -Djava.io.tmpdir=strach/ -jar ~/Programs/GenomeAnalysisTK-2.4-3-g2a7af43/GenomeAnalysisTK.jar -l INFO -R ~/ReferenceGenomes/StickleMasked/stickleMasked.fa -T UnifiedGenotyper -I PCAG8_final.bam -I PCAG7_final.bam -I LF_BR1_final.bam -I LF_BR2_final.bam -I LF_BR3_final.bam  -o PREFIX_unified.vcf &
+
+##cut -f 1,2,3,4,5,6,7,8,9,10,11,12 PREFIX_Unified_Present.vcf > PREFIX_Parents_BR1.vcf
+##cut -f 1,2,3,4,5,6,7,8,9,10,11,13 PREFIX_Unified_Present.vcf > PREFIX_Parents_BR2.vcf
+##cut -f 1,2,3,4,5,6,7,8,9,10,11,14 PREFIX_Unified_Present.vcf > PREFIX_Parents_BR3.vcf
+
+
+##java -Xmx2g -jar ~/Programs/GenomeAnalysisTK-2.4-3-g2a7af43/GenomeAnalysisTK.jar -R ~/ReferenceGenomes/StickleMasked/stickleMasked.fa -T PhaseByTransmission -V PREFIX_Parents_BR1.vcf -ped PREFIX_BR1.ped -o PREFIX_Parents_BR1_phased.vcf &
+
+##java -Xmx2g -jar ~/Programs/GenomeAnalysisTK-2.4-3-g2a7af43/GenomeAnalysisTK.jar -R ~/ReferenceGenomes/StickleMasked/stickleMasked.fa -T PhaseByTransmission -V PREFIX_Parents_BR2.vcf -ped PREFIX_BR2.ped -o PREFIX_Parents_BR2_phased.vcf &
+
+##java -Xmx2g -jar ~/Programs/GenomeAnalysisTK-2.4-3-g2a7af43/GenomeAnalysisTK.jar -R ~/ReferenceGenomes/StickleMasked/stickleMasked.fa -T PhaseByTransmission -V PREFIX_Parents_BR3.vcf -ped PREFIX_BR3.ped -o PREFIX_Parents_BR3_phased.vcf &
+
+##~/Scripts/personalTranscriptome.py LITCxFTC_Parents_BR1_phased.vcf ensGenes.fasta 2 LITCxFTC_BR1.h > LITCxFTC_BR1_haplopairs.fa & 
+##~/Scripts/personalTranscriptome.py LITCxFTC_Parents_BR2_phased.vcf ensGenes.fasta 2 LITCxFTC_BR2.h > LITCxFTC_BR2_haplopairs.fa & 
+##~/Scripts/personalTranscriptome.py LITCxFTC_Parents_BR3_phased.vcf ensGenes.fasta 2 LITCxFTC_BR3.h > LITCxFTC_BR3_haplopairs.fa & 
+
+cut -f 10 LITCxFTC_Parents_BR1_phased.vcf | grep '0|1' | wc
+  42365   42365 1118588
+cut -f 10 LITCxFTC_Parents_BR1_phased.vcf | grep '1|0' | wc
+  54483   54483 1433591
+
+and almost all sites (>99&) are shared accross phased vcf file
+##### ERROR MESSAGE: GTs cannot be missing for some samples if they are available for others in the record
+
+First, align sequences to the happairs.fa file
+
+##bowtie2-build LITCxFTC_BR1_haplopairs.fa LITCxFTC_BR1_haplopairs &
+##bowtie2-build LITCxFTC_BR2_haplopairs.fa LITCxFTC_BR2_haplopairs &
+##bowtie2-build LITCxFTC_BR3_haplopairs.fa LITCxFTC_BR3_haplopairs &
+
+##tophat --read-mismatches 5 -o LF_BR1_haplopairs --read-edit-dist 5 --read-realign-edit-dist 0 --coverage-search -g 25 --report-secondary-alignments --b2-sensitive LITCxFTC_BR1_haplopairs LITCxFTC_20dpfGAB_BR1_clipped.fastq &
+##tophat --read-mismatches 5 -o LF_BR2_haplopairs --read-edit-dist 5 --read-realign-edit-dist 0 --coverage-search -g 25 --report-secondary-alignments --b2-sensitive LITCxFTC_BR2_haplopairs LITCxFTC_20dpfGAB_BR2_clipped.fastq &
+##tophat --read-mismatches 5 -o LF_BR3_haplopairs --read-edit-dist 5 --read-realign-edit-dist 0 --coverage-search -g 25 --report-secondary-alignments --b2-sensitive LITCxFTC_BR3_haplopairs LITCxFTC_20dpfGAB_BR3_clipped.fastq 
+
+Sort the resulting BAM file
+
+##samtools sort -n LF_BR1_haplopairs/accepted_hits.bam LF_BR1_haplopairs/accepted_hits_sorted &
+##samtools sort -n LF_BR2_haplopairs/accepted_hits.bam LF_BR2_haplopairs/accepted_hits_sorted &
+##samtools sort -n LF_BR3_haplopairs/accepted_hits.bam LF_BR3_haplopairs/accepted_hits_sorted &
+
+eXpress that  (uses much memmory, 3x eXpress processes take up all the RAM on the server)
+
+##express -o LF_BR1_haplopairs -H LITCxFTC_BR1.h --calc-covar LITCxFTC_BR1_haplopairs.fa LF_BR1_haplopairs/accepted_hits_sorted.bam &
+##express -o LF_BR2_haplopairs -H LITCxFTC_BR2.h --calc-covar LITCxFTC_BR2_haplopairs.fa LF_BR2_haplopairs/accepted_hits_sorted.bam &
+##express -o LF_BR3_haplopairs -H LITCxFTC_BR3.h --calc-covar LITCxFTC_BR3_haplopairs.fa LF_BR3_haplopairs/accepted_hits_sorted.bam &
+
+Wrote script expressToP.py, which takes the 3 results as input and gives the over prob of ASE
+
+##~/Scripts/expressToP.py LF_BR1_haplopairs/results.xprs LF_BR2_haplopairs/results.xprs LF_BR3_haplopairs/results.xprs > LF_BR123_results.xprs
+
+##~/Scripts/expressToP.py -f 1.0 LF_BR1_haplopairs/results.xprs LF_BR2_haplopairs/results.xprs LF_BR3_haplopairs/results.xprs| wc
+12039
+
+##~/Scripts/expressToP.py -f 1.0 -p .05 LF_BR1_haplopairs/results.xprs LF_BR2_haplopairs/results.xprs LF_BR3_haplopairs/results.xprs| wc
+9964
+
+##~/Scripts/expressToP.py -f 1.0 -p .008333 LF_BR1_haplopairs/results.xprs LF_BR2_haplopairs/results.xprs LF_BR3_haplopairs/results.xprs| wc
+7362
+
+
+##~/Scripts/expressToP.py -f 10.0 LF_BR1_haplopairs/results.xprs LF_BR2_haplopairs/results.xprs LF_BR3_haplopairs/results.xprs| wc
+2854
+
+
+##~/Scripts/expressToP.py -f 10.0 -p .05 LF_BR1_haplopairs/results.xprs LF_BR2_haplopairs/results.xprs LF_BR3_haplopairs/results.xprs| wc
+2487
+
+##~/Scripts/expressToP.py -f 10.0 -p .008333 LF_BR1_haplopairs/results.xprs LF_BR2_haplopairs/results.xprs LF_BR3_haplopairs/results.xprs| wc
+1960
+
+
+@@@@@@@@@@@@@@@@@change script, use sf over cdf@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@
+
+~/Scripts/expressToP.py -f 1.0 LF_BR1_haplopairs/results.xprs LF_BR2_haplopairs/results.xprs LF_BR3_haplopairs/results.xprs| wc
+12039
+
+##~/Scripts/expressToP.py -f 1.0 -p .05 LF_BR1_haplopairs/results.xprs LF_BR2_haplopairs/results.xprs LF_BR3_haplopairs/results.xprs| wc
+10210
+
+##~/Scripts/expressToP.py -f 1.0 -p .008333 LF_BR1_haplopairs/results.xprs LF_BR2_haplopairs/results.xprs LF_BR3_haplopairs/results.xprs| wc
+7486
+
+
+##~/Scripts/expressToP.py -f 10.0 LF_BR1_haplopairs/results.xprs LF_BR2_haplopairs/results.xprs LF_BR3_haplopairs/results.xprs| wc
+2854
+
+
+##~/Scripts/expressToP.py -f 10.0 LF_BR1_haplopairs/results.xprs LF_BR2_haplopairs/results.xprs LF_BR3_haplopairs/results.xprs| wc
+2854
+
+##~/Scripts/expressToP.py -f 10.0 -p .05 LF_BR1_haplopairs/results.xprs LF_BR2_haplopairs/results.xprs LF_BR3_haplopairs/results.xprs| wc
+2486
+
+~/Scripts/expressToP.py -f 10.0 -p .008333 LF_BR1_haplopairs/results.xprs LF_BR2_haplopairs/results.xprs LF_BR3_haplopairs/results.xprs| wc
+1959
+
+##~/Scripts/expressToP.py LF_BR1_haplopairs/results.xprs LF_BR2_haplopairs/results.xprs LF_BR3_haplopairs/results.xprs > LF_BR123_results.xprs
+
+
+##~/Scripts/expressToP.py -f 1.0 -p .008333 LF_BR1_haplopairs/results.xprs LF_BR2_haplopairs/results.xprs LF_BR3_haplopairs/results.xprs > LF_BR123_results_P_00833.xprs
+
+62% of transcripts reject the null hypothesis
+
+E(above) = 6*P? = 12039 * .05 = 602
+Since we found 7486 genes, FDR = .08
+
+Create an FDR = .01 set, GO analysis
+
+What is out FDR?
+
+3 means (expected to be 0) - 1-sample t-test?  (seems most reasonable)
+
+Binomial test???????? -
+
+Multinomial?? - http://en.wikipedia.org/wiki/Multinomial_distribution
+
+http://www.jstor.org/stable/2291328 and this gross bayseian thing
+
+FDR = V/R, where V = false-positive and R=declared significant
+
+so p*N/R < .05.  Set p such that this is true
+
+Observable - N reads map to a given sequence
+	   - F reads map to the freshwater allele
+	   - N-F map to the marine allele
+
+Can we assume the the number of reads from a given allele is binomially distributed, 
+p(F=f|n,p)
+
+Our null is the p=.5, the probability of seeing either read is equal.
+
+P(H0|f,n) = BINOM.CDF(f,n,.5)
+
+P(H0|rep1,rep2,rep3) = P(H)|rep1) * P(H0|rep2) * P(H)|rep3)
+
+Can also find the subset where h) is rejected in all replicates.  
+
+This gives us the probability of rejecting the null in a given fish.  
+
+Can we assume that each replicate is independent?  Yes?
+
+so P(H0) across all samples = P(H0_1) * P(H0_2) * P(H0_3).  Since all we want is FDR <.1, lets ignore multiple hypothesis testing corrections
+
+
+Betweensample variance can be massive - significant one way and the other on the same transcript.  Could e phasing errors, check out somewhat systematically
+
+
+
+Once again, we change the stats, now use a G-test (additive, reject high variance samples)
+
+~/Scripts/expressToP.py -f 10.0 LF_BR1_haplopairs/results.xprs LF_BR2_haplopairs/results.xprs LF_BR3_haplopairs/results.xprs | wc
+171 out of 2854 transcripts, almost no enrichment.
+
+~/Scripts/expressToP.py -f 1.0 LF_BR1_haplopairs/results.xprs LF_BR2_haplopairs/results.xprs LF_BR3_haplopairs/results.xprs | wc
+672 out of 12039 transcripts, around a 10% enrichment.     
+
+Only looking at G-pooled, 4292 transcripts, 85% enrichment.  
+
+Only looking at G-total, 5635
+
+Looking at both, 4062 transcripts
+
+There must be a way to rescue pooled signal from noise
+
+~/Scripts/expressToP.py -f 1.0 LF_BR1_haplopairs/results.xprs LF_BR2_haplopairs/results.xprs LF_BR3_haplopairs/results.xprs > LF_BR123_results.xprs
+
+
+!!No p-val cutoff
+~/Scripts/expressToP.py -f 1.0 LF_BR1_haplopairs/results.xprs LF_BR2_haplopairs/results.xprs LF_BR3_haplopairs/results.xprs > LF_BR123_background.xprs
+
+1761 transcripts where P(G_het) < P(G_pooled)
+2868 transcripts where G_total, G_pooled < .05, and G_total/G_het < .05 (variance without G_het isn't significant.
+This isn't a bad heuristic, 
+Likely around 2000 genes display ASE with FDR = .1, maybe as few as 1500.  Still a good chunk
+
+This really was a good test
+
+Other studies work on pooled data:
+http://genome.cshlp.org/content/20/6/816.long
+http://www.biomedcentral.com/content/pdf/1471-2164-14-536.pdf
+
+
+Pooling and exact binomial
+
+No pooling for me
+Yeast/cell culture people are fine with pooling as everything is clonal.   Replicates across animals are messier.  Need to get a good G-test working, though an anova might also work (or some kind of paired t-test)
+
+http://onlinelibrary.wiley.com/doi/10.1111/1755-0998.12110/full
+G-test and even an anova.  How does one anova from this data?
+
+G-test is possible, and looks promising, but need one last test
+
+
+
+#############################################################################
+F vs Consevation   ##########################################################
+#############################################################################
+
+make ensGeneCons.bed
+ENSid	len(CDS)	meanCons(CDS)
+
+wrote ensGeneCons.py to do this
+~/Scripts/ensGeneCons.py ensGene.bed mostCons.bed > ensGensCons.bed
+
+fVsCons.py to track expression differences vs conservation
+
+#####################################################################
+CUFFDIFF#############################################################
+#####################################################################
+
+
+Use express to write output files for cuffdiff
+
+Need GTF2/GFF3 file of transcripts as input, - done
+along with two or more SAM files containing the fragment alignments for two or more samples ugh
+
+--output-align-samp : With this option, eXpress outputs an additional file called hits.samp.(sam/bam) 
+containing a single alignment for each fragment sampled at random based on the alignment likelihoods 
+calculated by eXpress
+
+Will output sam containing alignments to reference diplome.  Need to convert to two haplomes, no need to correct for ref bias.
+
+##gunzip LITC*fa.gz 
+##express -o LF_BR1_haplopairs -H LITCxFTC_BR1.h -B 2 --calc-covar --output-align-samp LITCxFTC_BR1_haplopairs.fa LF_BR1_haplopairs/accepted_hits_sorted.bam &
+##express -o LF_BR2_haplopairs -H LITCxFTC_BR2.h -B 2 --calc-covar --output-align-samp LITCxFTC_BR2_haplopairs.fa LF_BR2_haplopairs/accepted_hits_sorted.bam &
+##express -o LF_BR3_haplopairs -H LITCxFTC_BR3.h -B 2 --calc-covar --output-align-samp LITCxFTC_BR3_haplopairs.fa LF_BR3_haplopairs/accepted_hits_sorted.bam &
+##samtools view LF_BR1_haplopairs/hits.1.samp.bam > LF_BR1_haplopairs_dip.sam &
+##samtools view LF_BR2_haplopairs/hits.1.samp.bam > LF_BR2_haplopairs_dip.sam &
+##samtools view LF_BR3_haplopairs/hits.1.samp.bam > LF_BR3_haplopairs_dip.sam &
+
+
+
+##~/Scripts/ReduceDipSam.py LF_BR1_haplopairs_dip.sam LF_BR1_haplopairs_hap &
+##~/Scripts/ReduceDipSam.py LF_BR2_haplopairs_dip.sam LF_BR2_haplopairs_hap &
+##~/Scripts/ReduceDipSam.py LF_BR3_haplopairs_dip.sam LF_BR3_haplopairs_hap &
+
+
+sort -k 3,3 -k 4,4n LF_BR1_haplopairs_hap_1.sam > LF_BR1_haplopairs_hap_sorted_1.sam &
+sort -k 3,3 -k 4,4n LF_BR1_haplopairs_hap_2.sam > LF_BR1_haplopairs_hap_sorted_2.sam &
+sort -k 3,3 -k 4,4n LF_BR2_haplopairs_hap_1.sam > LF_BR2_haplopairs_hap_sorted_1.sam &
+sort -k 3,3 -k 4,4n LF_BR2_haplopairs_hap_2.sam > LF_BR2_haplopairs_hap_sorted_2.sam &
+sort -k 3,3 -k 4,4n LF_BR3_haplopairs_hap_1.sam > LF_BR3_haplopairs_hap_sorted_1.sam &
+sort -k 3,3 -k 4,4n LF_BR3_haplopairs_hap_2.sam > LF_BR3_haplopairs_hap_sorted_2.sam &
+
+
+
+
+
+
+sort -k 3,3 -k 4,4n LF_BR1_haplopairs_dip.sam > LF_BR1_haplopairs_dip_sorted.sam &
+cufflinks -p 8 -o LF_BR1_dif_cuff -j 0.0 -F 0.0 LF_BR1_haplopairs_dip_sorted.sam &
+
+cufflinks -o LF_BR1_cuff_2 LF_BR1_haplopairs_hap_sorted_2.sam &
+cufflinks -o LF_BR2_cuff_1 LF_BR2_haplopairs_hap_sorted_1.sam &
+cufflinks -o LF_BR2_cuff_2 LF_BR2_haplopairs_hap_sorted_2.sam &
+cufflinks -o LF_BR3_cuff_1 LF_BR3_haplopairs_hap_sorted_1.sam &
+cufflinks -o LF_BR3_cuff_2 LF_BR3_haplopairs_hap_sorted_2.sam &
+
+
+
+
+cuffcompare -o LF_BR123_cuffcomp /data/James/AlleleSpecificExpression/LF_BR1_transcripts_1.gtf /data/James/AlleleSpecificExpression/LF_BR1_transcripts_2.gtf /data/James/AlleleSpecificExpression/LF_BR2_transcripts_1.gtf /data/James/AlleleSpecificExpression/LF_BR2_transcripts_2.gtf /data/James/AlleleSpecificExpression/LF_BR3_transcripts_1.gtf /data/James/AlleleSpecificExpression/LF_BR3_transcripts_2.gtf
+
+cuffmerge -p 8 LF_BR123_merge.txt > LF_BR123_transcriptome.gtf
+
+
+
+Skip cufflinks, use express output to maek GTFs
+GTFdiplome.py
+
+cuffmerge -p 8 LF_BR123_merge.txt -o cuffmerge > LF_BR123_transcriptome_second.gtf
+
+~/Scripts/GTFdiplome.py LF_BR1_haplopairs/results.xprs LF_BR1_transcripts
+~/Scripts/GTFdiplome.py LF_BR2_haplopairs/results.xprs LF_BR2_transcripts
+~/Scripts/GTFdiplome.py LF_BR3_haplopairs/results.xprs LF_BR3_transcripts
+
+
+
+cuffdiff -L Fresh,Marine -o cuffdiffLF_BR123 -p 8 -FDR .1 LF_BR123_cuffcomp.combined.gtf LF_BR1_haplopairs_hap_sorted_1.sam LF_BR1_haplopairs_hap_sorted_2.sam &
+
+cuffdiff -L Fresh,Marine -o cuffdiffLF_BR123 -p 8 -FDR .1 merged_asm/merged.gtf LF_BR1_haplopairs_hap_sorted_1.sam LF_BR2_haplopairs_hap_sorted_2.sam &
+
+
+express -o test -H LITCxFTC_BR1.h -B 2 --calc-covar --output-align-prob LITCxFTC_BR1_haplopairs.fa LF_BR1_haplopairs/accepted_hits_sorted.bam 
+samtools view test/hits.1.prob.bam > test.sam 
+~/Scripts/ReduceDipSam.py test.sam test 
+sort -k 3,3 -k 4,4n test_1.sam > test_sorted_1.sam
+sort -k 3,3 -k 4,4n test_2.sam > test_sorted_2.sam
+
+cufflinks -p 8 -o test -j 0.0 -F 0.0 test_sorted_1.sam &
+
+
+cuffdiff -L Fresh,Marine -p 8 -o difftest LF_BR123_cuffcomp.combined.gtf test_sorted_1.sam test_sorted_2.sam
+
+
+ReduceDipSam.py
+
+input: a transcripts sam file from express, ENSID_1/N ENSID_2
+outut: two sams, one for each haplotype in the dipsam
+
+
+cuffdiff transcripts.gff fresh1.sam,fresh2.sam,fresh3.sam marine1.sam,marine2.sam,marine3.sam -L Fresh,Marine -o cuffdiffLF_BR123 -p 8 --compatible-hits-norm -FDR .1
+
+
+Script for cuffdiff to GO
+
+Lets run cufflinks and try using its gtfs
+cufflinks -o LF_BR1_cuff_1 -G LF_BR123_cuffcomp.combined.gtf -j 0.0 -F 0.0 --no-faux-reads LF_BR1_haplopairs_hap_sorted_1.sam &
+cufflinks -o LF_BR1_cuff_2 -G LF_BR123_cuffcomp.combined.gtf -j 0.0 -F 0.0 --no-faux-reads LF_BR1_haplopairs_hap_sorted_2.sam &
+cufflinks -o LF_BR2_cuff_1 -G LF_BR123_cuffcomp.combined.gtf -j 0.0 -F 0.0 --no-faux-reads LF_BR2_haplopairs_hap_sorted_1.sam &
+cufflinks -o LF_BR2_cuff_2 -G LF_BR123_cuffcomp.combined.gtf -j 0.0 -F 0.0 --no-faux-reads LF_BR2_haplopairs_hap_sorted_2.sam &
+cufflinks -o LF_BR3_cuff_1 -G LF_BR123_cuffcomp.combined.gtf -j 0.0 -F 0.0 --no-faux-reads LF_BR3_haplopairs_hap_sorted_1.sam &
+cufflinks -o LF_BR3_cuff_2 -G LF_BR123_cuffcomp.combined.gtf -j 0.0 -F 0.0 --no-faux-reads LF_BR3_haplopairs_hap_sorted_2.sam &
+
+__LF_BR123_merge.txt__
+/data/James/AlleleSpecificExpression/LF_BR1_cuff_1/transcripts.gtf
+/data/James/AlleleSpecificExpression/LF_BR1_cuff_2/transcripts.gtf
+/data/James/AlleleSpecificExpression/LF_BR2_cuff_1/transcripts.gtf
+/data/James/AlleleSpecificExpression/LF_BR2_cuff_2/transcripts.gtf
+/data/James/AlleleSpecificExpression/LF_BR3_cuff_1/transcripts.gtf
+/data/James/AlleleSpecificExpression/LF_BR3_cuff_2/transcripts.gtf
+
+
+cuffmerge -p 8 -g LF_BR123_transcriptome.gtf LF_BR123_merge.txt -o cuffmerge > LF_BR123_transcriptome_second.gtf
+
+cuffdiff -L Fresh,Marine -o cuffdiffLF_BR123 -p 8 -FDR .1 merged_asm/merged.gtf LF_BR1_haplopairs_hap_sorted_1.sam LF_BR1_haplopairs_hap_sorted_2.sam &
+
+
+try cuffdiff on LF_BR1,2,3 samples (no express)
+
+cuffdiff -o test -p 8 -FDR .1 LF_cuff_BR1/transcripts.gtf LF_BR1/accepted_hits.bam LF_BR2/accepted_hits.bam
+this works - has @SQ header
+
+
+Lets try and see if the @SQ header is messed up:
+samtools sort LF_BR1_haplopairs/hits.1.samp.bam LF_BR1_dip_sorted &
+samtools sort LF_BR2_haplopairs/hits.1.samp.bam LF_BR2_dip_sorted &
+
+cufflinks -p 8 -o test LF_BR1_dip_sorted.bam
+
+
+cuffdiff -o test -p 8 -FDR .1 test/transcripts.gtf LF_BR1/accepted_hits.bam LF_BR2/accepted_hits.bam
+
+
+Generic ASE pipeline:
+
+Align Reads with tophat
+make GTF with cufflinks
+merge GTFs accross replicates to make a combined GTF
+Generate a reference transcriptome.fa from GTF (or from bed??)
+Call SNPs from parents and from childen with GATK
+Phase SNPs 
+Used Phased SNPs to generate a personal transcriptome
+Align reads to new personal transcriptome
+Estimate transcript abundance with eXpress
+Write SAM files for each haplotype
+Use cufflinks to generate GTFs for all express outputs
+use cuffmerge to combine all GTFs from express
+use cuffdiff to find ASE
+
+
+
+Ignore the above, lets work on getting this pipeline going
+One key difference: when making transcriptome.fa, use full unspliced transcripts from cufflinks transcripts.gtf
+
+Align reads with tophat:
+##tophat --read-mismatches 3 --read-edit-dist 3 --read-realign-edit-dist 0 --coverage-serach --library-type fr-unstranded --b2-sensitive -G ensGenes.gtf PCAG7_PCAG8_masked_ref reads.fastq
+
+Make GTF with cufflinks:
+##cufflinks -g ensGene.gtf -u -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -o LF_cuff_BR1 -v LF_BR1/accepted_hits.bam &
+
+
+Merge GTF with cuffcompare:
+##cuffcompare -p 8 -r ensGene.gtf -s /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -o cfcompLF_BR123 LF_cuff_BR1/transcripts.gtf LF_cuff_BR2/transcripts.gtf LF_cuff_BR3/transcripts.gtf
+
+##cuffmerge -o cuffmerge_LF_BR123 -p 8 -g ensGene.gtf cuffmerge.txt 
+
+__cuffmerge.txt__
+LF_cuff_BR1/transcripts.gtf
+LF_cuff_BR2/transcripts.gtf
+LF_cuff_BR3/transcripts.gtf
+
+
+Write a reference transcriptome from the GTF (use ref GTF)
+##~/Scripts/GTFtoFasta.py ensGene.gtf > ensGene.fasta
+
+
+Call SNPs from parents and from childen with GATK
+~/Scripts/callvariantsfromBamlist(make list of all BAM files)
+get a unifiedvcf, cut into pieces and phase-by-transmission
+
+Phase SNPs 
+
+Create Personal Transcriptome:
+~/Scripts/personalTranscriptome.py LITCxFTC_Parents_BR1_phased.vcf ensGene.fasta 2 LITCxFTC_BR1.h > LITCxFTC_BR1_haplopairs.fa & 
+~/Scripts/personalTranscriptome.py LITCxFTC_Parents_BR2_phased.vcf ensGene.fasta 2 LITCxFTC_BR2.h > LITCxFTC_BR2_haplopairs.fa & 
+~/Scripts/personalTranscriptome.py LITCxFTC_Parents_BR3_phased.vcf ensGene.fasta 2 LITCxFTC_BR3.h > LITCxFTC_BR3_haplopairs.fa & 
+
+Align Reads to personal Transcriptome:
+bowtie2-build LITCxFTC_BR1_haplopairs.fa LITCxFTC_BR1_haplopairs &
+bowtie2-build LITCxFTC_BR2_haplopairs.fa LITCxFTC_BR2_haplopairs &
+bowtie2-build LITCxFTC_BR3_haplopairs.fa LITCxFTC_BR3_haplopairs &
+
+tophat --read-mismatches 5 -o LF_BR1_haplopairs --read-edit-dist 5 --read-realign-edit-dist 0 --coverage-search -g 25 --report-secondary-alignments --b2-sensitive LITCxFTC_BR1_haplopairs LITCxFTC_20dpfGAB_BR1_clipped.fastq &
+tophat --read-mismatches 5 -o LF_BR2_haplopairs --read-edit-dist 5 --read-realign-edit-dist 0 --coverage-search -g 25 --report-secondary-alignments --b2-sensitive LITCxFTC_BR2_haplopairs LITCxFTC_20dpfGAB_BR2_clipped.fastq &
+tophat --read-mismatches 5 -o LF_BR3_haplopairs --read-edit-dist 5 --read-realign-edit-dist 0 --coverage-search -g 25 --report-secondary-alignments --b2-sensitive LITCxFTC_BR3_haplopairs LITCxFTC_20dpfGAB_BR3_clipped.fastq &
+
+Estimate transcript abundance with eXpress
+express -o LF_BR1_haplopairs -H LITCxFTC_BR1.h -B 2 --calc-covar --output-align-samp LITCxFTC_BR1_haplopairs.fa LF_BR1_haplopairs/accepted_hits.bam &
+express -o LF_BR2_haplopairs -H LITCxFTC_BR2.h -B 2 --calc-covar --output-align-samp LITCxFTC_BR2_haplopairs.fa LF_BR2_haplopairs/accepted_hits.bam &
+express -o LF_BR3_haplopairs -H LITCxFTC_BR3.h -B 2 --calc-covar --output-align-samp LITCxFTC_BR3_haplopairs.fa LF_BR3_haplopairs/accepted_hits.bam &
+
+
+2013-Sep-17 12:49:39 - SEVERE: Target '>ENSGACT00000014376_2' differs in length between MultiFASTA and alignment (SAM/BAM) files (1877  vs. 2097).
+
+
+Lets try using the unmasked version of the genome for ensGene.fa
+##~/Scripts/GTFtoFasta.py ensGene.gtf > ensGeneUnmasked.fasta
+
+
+~/Scripts/personalTranscriptome.py LITCxFTC_Parents_BR1_phased.vcf ensGeneUnmasked.fasta 2 LITCxFTC_BR1.h > LITCxFTC_BR1_haplopairs.fa & 
+~/Scripts/personalTranscriptome.py LITCxFTC_Parents_BR2_phased.vcf ensGeneUnmasked.fasta 2 LITCxFTC_BR2.h > LITCxFTC_BR2_haplopairs.fa & 
+~/Scripts/personalTranscriptome.py LITCxFTC_Parents_BR3_phased.vcf ensGeneUnmasked.fasta 2 LITCxFTC_BR3.h > LITCxFTC_BR3_haplopairs.fa &
+
+bowtie2-build LITCxFTC_BR1_haplopairs.fa LITCxFTC_BR1_haplopairs &
+bowtie2-build LITCxFTC_BR2_haplopairs.fa LITCxFTC_BR2_haplopairs 
+bowtie2-build LITCxFTC_BR3_haplopairs.fa LITCxFTC_BR3_haplopairs 
+
+
+
+tophat --read-mismatches 5 -o LF_BR1_haplopairs --read-edit-dist 5 --read-realign-edit-dist 0 --coverage-search -g 25 --report-secondary-alignments --b2-sensitive LITCxFTC_BR1_haplopairs LITCxFTC_20dpfGAB_BR1_clipped.fastq &
+tophat --read-mismatches 5 -o LF_BR2_haplopairs --read-edit-dist 5 --read-realign-edit-dist 0 --coverage-search -g 25 --report-secondary-alignments --b2-sensitive LITCxFTC_BR2_haplopairs LITCxFTC_20dpfGAB_BR2_clipped.fastq &
+tophat --read-mismatches 5 -o LF_BR3_haplopairs --read-edit-dist 5 --read-realign-edit-dist 0 --coverage-search -g 25 --report-secondary-alignments --b2-sensitive LITCxFTC_BR3_haplopairs LITCxFTC_20dpfGAB_BR3_clipped.fastq 
+
+samtools sort -n accepted_hits.bam accepted_hits_sorted
+samtools sort -n accepted_hits.bam accepted_hits_sorted
+samtools sort -n accepted_hits.bam accepted_hits_sorted
+
+express -o LF_BR1_haplopairs -H LITCxFTC_BR1.h -B 2 --calc-covar --output-align-samp LITCxFTC_BR1_haplopairs.fa LF_BR1_haplopairs/accepted_hits_sorted.bam &
+express -o LF_BR2_haplopairs -H LITCxFTC_BR2.h -B 2 --calc-covar --output-align-samp LITCxFTC_BR2_haplopairs.fa LF_BR2_haplopairs/accepted_hits_sorted.bam &
+express -o LF_BR3_haplopairs -H LITCxFTC_BR3.h -B 2 --calc-covar --output-align-samp LITCxFTC_BR3_haplopairs.fa LF_BR3_haplopairs/accepted_hits_sorted.bam &
+
+samtools sort LF_BR1_haplopairs/hits.1.samp.bam LF_BR1_haplopairs/hits.1.samp_sorted
+
+cufflinks -p 8 -o LF_BR1_dif_cuff -j 0.0 -F 0.0 LF_BR1_haplopairs/hits.1.samp_sorted.bam
+
+cufflinks -p 8 -o LF_BR1_dif_cuff -j 0.0 -F 0.0 LF_BR1_haplopairs/accepted_hits.bam
+
+express -o LF_BR1_haplopairs -H LITCxFTC_BR1.h -B 2 --calc-covar --output-align-prob LITCxFTC_BR1_haplopairs.fa LF_BR1_haplopairs/accepted_hits_sorted.bam &
+express -o LF_BR2_haplopairs -H LITCxFTC_BR2.h -B 2 --calc-covar --output-align-prob LITCxFTC_BR2_haplopairs.fa LF_BR2_haplopairs/accepted_hits_sorted.bam &
+express -o LF_BR3_haplopairs -H LITCxFTC_BR3.h -B 2 --calc-covar --output-align-prob LITCxFTC_BR3_haplopairs.fa LF_BR3_haplopairs/accepted_hits_sorted.bam &
+
+
+ 
+
+####################################################################################################################################
+Analysis of CF data           ######################################################################################################
+####################################################################################################################################
+
+
+wc LF_BR123_FDR.1_results.bed
+  572  2860 25340 LF_BR123_FDR.1_results.bed
+
+wc CSS_HMM_Union.bed
+ 242  726 5653 CSS_HMM_Unionbed
+
+intersectBed -a LF_BR123_FDR.1_results.bed -b CSS_HMM_Union.bed -u | wc
+      4      20     177
+
+
+~/Scripts/sizeBed.py CSS_HMM_Union.bed 
+2426129
+
+2426129/460000000 = 0.00527419347
+
+0.00527419347 * 572 = 3.01683866484
+
+chrXX	5207822	5213631	+	ENSGACT00000007951
+chrI	21495063	21495881	-	ENSGACT00000018870	JAGN1 (2 of 3)
+chrI	21589669	21596657	-	ENSGACT00000018892	IGFBP2 (1 of 2)
+chrVII	12211637	12214316	-	ENSGACT00000026674	SERPINH1 (2 of 2)
+
+
+
+
+
+ToothQTL
+
+intersectBed -a LF_BR123_FDR.1_results.bed -b ToothQTl.bed -u
+
+ ToothQTl.bed 
+~/Scripts/sizeBed.py ToothQTl.bed 
+2485448
+
+chrXXI	1975737	1980935	+	ENSGACT00000002450 - SERPINB?
+chrXXI	2929787	2939915	+	ENSGACT00000002803 - MYH
+chrXXI	3947751	3951766	-	ENSGACT00000003042 - SLC35B3
+
+
+
+#chr4_cluster.bed
+chrIV	4460000	17820000
+chrIV	24850000	28360000
+
+
+#chr20_cluster.bed
+chrXX	3340000	14680000
+
+#chr21_culter.bed
+chrXXI	3770096	4587910
+
+
+~/Scripts/sizeBed.py chr4_cluster.bed
+16870000
+
+intersectBed -a LF_BR123_FDR.1_results.bed -b chr4_cluster.bed |wc
+20
+
+E = 16870000 /460000000 * 572 = 20.9774782609
+
+
+~/Scripts/sizeBed.py chr20_cluster.bed
+11340000
+
+intersectBed -a LF_BR123_FDR.1_results.bed -b chr20_cluster.bed |wc
+15
+
+E = 11340000/460000000 * 572 = 14.1010434783
+
+
+~/Scripts/sizeBed.py chr21_cluster.bed
+817814
+
+intersectBed -a LF_BR123_FDR.1_results.bed -b chr21_cluster.bed |wc
+1
+
+
+No gene clusters appear to be enriched for ASE.  
+
+
+# inversions.bed
+chrI	21500000	21930000
+chrXI	5440000	5850000
+chrXXI	5790000	7480000
+
+ ~/Scripts/sizeBed.py inversions.bed 
+2530000
+intersectBed -a LF_BR123_FDR.1_results.bed -b inversions.bed -u 
+chrXXI	5896124	5903328	-	ENSGACT00000003400	HGD
+chrXXI	6565569	6566700	+	ENSGACT00000003610	TCEB1
+chrI	21589669	21596657	-	ENSGACT00000018892	IGFBP2	
+
+E = 2530000 / 460000000 * 572 = 3.146
+
+
+cons and ASE:
+ENSGACT00000001246 94.4032459426 - fish specific uncharacterized (NLRC3-like?!?!?!?!)
+ENSGACT00000002333 8.78028876334
+ENSGACT00000002364 97.880794702  - NLRC3-like
+ENSGACT00000002877 39.3549337261
+ENSGACT00000014676 282.187633262 - fish specific uncharacterized (NLRC3-like?!?!?!?!)
+ENSGACT00000015945 110.528225806 - Cyp2k19
+ENSGACT00000018435 668.883116883 - HIST1H41 - one replicate goes in the other direction
+ENSGACT00000023871 836.0	 - HIST3H3 - low abundance
+ENSGACT00000025935 14.1421686747 
+ENSGACT00000026000 19.6282051282
+
+ENSGACT00000003706 669.230964467 0.824013531091 - HIST2H2A
+ENSGACT00000010066 691.306188925 0.830083057597 - HECA - critical player in drosophila imaginal discs
+ENSGACT00000003412 484.836317136 0.859708418444 - HIST2H2AB
+ENSGACT00000010557 374.266583229 0.831726371713 - MMD2 (monocyte to macrophage)
+
+
+Compare express to snp-count:
+~/Scripts/alleleBias.py LITCxFTC_BR1_het_filtered.vcf LITCxFTC_BR2_het_filtered.vcf LITCxFTC_BR3_het_filtered.vcf > pvals.vcf
+
+wc pvals.vcf 
+  3036  33396 446623 pvals.vcf
+wc LF_BR123_FDR.1_results.xprs 
+  601  6340 90329 LF_BR123_FDR.1_results.xprs
+intersectBed -a pvals.vcf -b LF_BR123_FDR.1_results.bed | wc
+     79     869   11676
+
+
+JCH001 ASE Analysis
+grep SOS ASE_mask_FDR,05_names.txt
+grep GRB ASE_mask_FDR,05_names.txt
+GRB2
+GRB14
+ grep ELK ASE_mask_FDR,05_names.txt
+ELK3
+grep ERK ASE_mask_FDR,05_names.txt
+grep MEK ASE_mask_FDR,05_names.txt
+grep RAF ASE_mask_FDR,05_names.txt
+TRAF4
+TRAF4
+TRAF5
+TRAF3IP1
+grep RAS ASE_mask_FDR,05_names.txt
+RASGRP4
+RASA3
+RASSF4
+RASSF4
+RASSF4
+ERAS
+RASGRP1
+grep PI3k ASE_mask_FDR,05_names.txt
+grep PI3 ASE_mask_FDR,05_names.txt
+grep FGF ASE_mask_FDR,05_names.txt
+FGFR1OP2
+FGFR1OP2
+grep JNK ASE_mask_FDR,05_names.txt
+grep ATF ASE_mask_FDR,05_names.txt
+ATF6B
+grep PLC ASE_mask_FDR,05_names.txt
+PLCG2
+PLCG2
+PLCB2
+PLCB3
+
+~/Scripts/BedToFasta.py ASE_mask_ensGene2kslop_FDR_05_fpkm_1.bed ~/ReferenceGenomes/StickleMasked/stickleMasked.fa > ASE_mask_ensGene2kslop_FDR_05_fpkm_1.fa
+
+~/Scripts/BedToFasta.py ASE_mask_ensGene2kslop_FDR_05.bed ~/ReferenceGenomes/StickleMasked/stickleMasked.fa > ASE_mask_ensGene2kslop_FDR_05.fa
+
+meme-chip -oc ASE_mask_ensGene2kslop_FDR_05_fpkm_1 -db ../../eRNA/motif_databases/JASPAR_CORE_2009_vertebrates.meme ASE_mask_ensGene2kslop_FDR_05_fpkm_1.fa &
+
+meme-chip -oc ASE_mask_ensGene2kslop_FDR_05 -db ../../eRNA/motif_databases/JASPAR_CORE_2009_vertebrates.meme ASE_mask_ensGene2kslop_FDR_05.fa &
+
+############################################
+Looking at the 1/6 of a lane RNA-seq - can we fit 10-12 RNA-seq libraries in a single lane?
+12 would be 2x more PAXB BS, 5 PAXB VTP, and 5 CERC VTP
+
+##genomeCoverageBed -dz -ibam JCH001D_sorted_final_dedup_rg.bam -g /home/ctmiller/ReferenceGenomes/stickleback.genome > JCH001D_final_rg.d &
+##genomeCoverageBed -dz -ibam JCH001E_sorted_final_dedup_rg.bam -g /home/ctmiller/ReferenceGenomes/stickleback.genome > JCH001E_final_rg.d &
+##genomeCoverageBed -dz -ibam JCH001F_sorted_final_dedup_rg.bam -g /home/ctmiller/ReferenceGenomes/stickleback.genome > JCH001F_final_rg.d &
+
+coverageBed -d -abam JCH001D_sorted_final_dedup_rg.bam -b ../BED/ensGene_fpkm_1_BS.bed > JCH001D_final_rg_genes_fpmk_1.d &
+coverageBed -d -abam JCH001E_sorted_final_dedup_rg.bam -b ../BED/ensGene_fpkm_1_BS.bed > JCH001E_final_rg_genes_fpmk_1.d &
+coverageBed -d -abam JCH001F_sorted_final_dedup_rg.bam -b ../BED/ensGene_fpkm_1_BS.bed > JCH001F_final_rg_genes_fpmk_1.d &
+
+coverageBed -hist -abam JCH001D_sorted_final_dedup_rg.bam -b ../BED/ensGene_fpkm_1_BS.bed > JCH001D_final_rg_genes_fpmk_1.h &
+coverageBed -hist -abam JCH001E_sorted_final_dedup_rg.bam -b ../BED/ensGene_fpkm_1_BS.bed > JCH001E_final_rg_genes_fpmk_1.h &
+coverageBed -hist -abam JCH001F_sorted_final_dedup_rg.bam -b ../BED/ensGene_fpkm_1_BS.bed > JCH001F_final_rg_genes_fpmk_1.h &
+
+
+grep all JCH001D_final_rg_genes_fpmk_1.h > JCH001D_final_rg_genes_fpmk_1.all &
+grep all JCH001E_final_rg_genes_fpmk_1.h > JCH001E_final_rg_genes_fpmk_1.all &
+grep all JCH001F_final_rg_genes_fpmk_1.h > JCH001F_final_rg_genes_fpmk_1.all &
+
+This seems highly desireable - the only question now seems to be whether to include 2x PAXB BS in this lane, I would guess fine.
+
+
+import matplotlib.pyplot as plt
+f = open('JCH001D_final_rg_genes_fpmk_1.d','r')
+plt.figure()
+fullcoverages = []
+halfcoverages = []
+partialcoverages = []
+bins = numpy.arange(0,100,1)
+oldid = ''
+id = ''
+count = 0
+cov = 0
+for line in f:
+ 
+    line = line.strip()
+    split = line.split('\t')
+
+    id = split[5].split('"')[1]
+    if oldid == '':
+        oldid=id
+    elif oldid != id:
+        fullcoverages.append(cov/count)
+        halfcoverages.append(cov/(count*2))
+        partialcoverages.append(int(cov/(count*1.667)))
+        cov = 0
+        count = 0
+        oldid = id
+
+    cov += int(split[7])
+    count += 1
+    
+fullcoverages.append(cov/count)
+halfcoverages.append(cov/(count*2))
+partialcoverages.append(int(cov/(count*1.667)))
+print len(fullcoverages)
+plt.hist([fullcoverages,partialcoverages,halfcoverages],bins, histtype='step', label=['full','partial','half'], cumulative=True)
+plt.legend(loc=4)
+plt.title('Gene Coverage by RNA-seq Reads')
+plt.xlabel('Mean Coverage')
+plt.ylabel('Cumulative number of Genes')
+    
+mv /media/JCH_HD_1/ASE_10-1-13/OLD/LITCxFTC_20dpfGAB_BR1_clipped.fastq.gz .
+mv /media/JCH_HD_1/ASE_10-1-13/OLD/LITCxFTC_20dpfGAB_BR2_clipped.fastq.gz .
+mv /media/JCH_HD_1/ASE_10-1-13/OLD/LITCxFTC_20dpfGAB_BR3_clipped.fastq.gz .
+mv /media/JCH_HD_1/ASE_10-1-13/LITCxFTC_Parents_BR1.vcf . 
+mv /media/JCH_HD_1/ASE_10-1-13/LITCxFTC_Parents_BR2.vcf .
+mv /media/JCH_HD_1/ASE_10-1-13/LITCxFTC_Parents_BR3.vcf .
+gunzip *gz
+~/Scripts/MLASE.py -r ../eXpress/ensGene.fa -n CF1A -f 1,0,2 -p 2 -v LITCxFTC_Parents_BR1.vcf LITCxFTC_20dpfGAB_BR1_clipped.fastq &
+~/Scripts/MLASE.py -r ../eXpress/ensGene.fa -n CF1B -f 1,0,2 -p 2 -v LITCxFTC_Parents_BR2.vcf LITCxFTC_20dpfGAB_BR2_clipped.fastq &
+~/Scripts/MLASE.py -r ../eXpress/ensGene.fa -n CF1C -f 1,0,2 -p 2 -v LITCxFTC_Parents_BR3.vcf LITCxFTC_20dpfGAB_BR3_clipped.fastq &
+
+
+
+
+######################################################################################################################################
+6/19/14 ASE redux fresh server            ############################################################################################
+######################################################################################################################################
+
+ensGene re-make
+
+downloaded ensGene.gtf from UCSC (ensGene track)
+run cufflinks on all BAM files from VTP using ensGene as a soft reference
+
+cufflinks --library-type fr-firststrand -o JCH003A_cuff -g /data/James/BED/ensGene.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH003A_sorted_final_dedup.bam &
+cufflinks --library-type fr-firststrand -o JCH003B_cuff -g /data/James/BED/ensGene.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH003B_sorted_final_dedup.bam &
+cufflinks --library-type fr-firststrand -o JCH003C_cuff -g /data/James/BED/ensGene.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH003C_sorted_final_dedup.bam &
+cufflinks --library-type fr-firststrand -o JCH003G_cuff -g /data/James/BED/ensGene.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH003G_sorted_final_dedup.bam &
+cufflinks --library-type fr-firststrand -o JCH003H_cuff -g /data/James/BED/ensGene.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH003H_sorted_final_dedup.bam &
+
+cufflinks --library-type fr-firststrand -o JCH003A_forced_cuff -G /data/James/BED/ensGene.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH003A_sorted_final_dedup.bam &
+cufflinks --library-type fr-firststrand -o JCH003B_forced_cuff -G /data/James/BED/ensGene.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH003B_sorted_final_dedup.bam &
+cufflinks --library-type fr-firststrand -o JCH003C_forced_cuff -G /data/James/BED/ensGene.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH003C_sorted_final_dedup.bam &
+cufflinks --library-type fr-firststrand -o JCH003G_forced_cuff -G /data/James/BED/ensGene.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH003G_sorted_final_dedup.bam &
+cufflinks --library-type fr-firststrand -o JCH003H_forced_cuff -G /data/James/BED/ensGene.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH003H_sorted_final_dedup.bam &
+
+cufflinks --library-type fr-firststrand -o JCH003A_forced_collapsed_cuff -G /data/James/BED/ensGene_collapsed.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH003A_sorted_final_dedup.bam &
+cufflinks --library-type fr-firststrand -o JCH003B_forced_collapsed_cuff -G /data/James/BED/ensGene_collapsed.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH003B_sorted_final_dedup.bam &
+cufflinks --library-type fr-firststrand -o JCH003C_forced_collapsed_cuff -G /data/James/BED/ensGene_collapsed.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH003C_sorted_final_dedup.bam &
+cufflinks --library-type fr-firststrand -o JCH003G_forced__collapsed_cuff -G /data/James/BED/ensGene_collapsed.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH003G_sorted_final_deup.bam &
+cufflinks --library-type fr-firststrand -o JCH003H_forced_collapsed_cuff -G /data/James/BED/ensGene_collapsed.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH003H_sorted_final_dedup.bam &
+
+mv JCH003B_forced__collapsedcuff JCH003B_forced_collapsed_cuff
+mv JCH003C_forced__collapsedcuff JCH003C_forced_collapsed_cuff
+mv JCH003G_forced__collapsedcuff JCH003G_forced_collapsed_cuff
+mv JCH003H_forced__collapsedcuff JCH003H_forced_collapsed_cuff
+
+ls JCH003*_cuff/transcripts.gtf > gtflist.l
+cuffmerge -o PAXB_VTP_cuff -g /data/James/BED/ensGene.gtf -s /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -p 3 gtflist.l
+
+######################################################################################################################
+PAXB_VTP                                                   ###########################################################
+######################################################################################################################
+
+
+zcat JCH003A_index2_CGATGT_L006_R1_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/JCH003A_R1_all.fastq &
+zcat JCH003A_index2_CGATGT_L006_R2_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/JCH003A_R2_all.fastq &
+zcat JCH003B_index4_TGACCA_L006_R1_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/JCH003B_R1_all.fastq &
+zcat JCH003B_index4_TGACCA_L006_R2_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/JCH003B_R2_all.fastq &
+zcat JCH003C_index7_CAGATC_L006_R1_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/JCH003C_R1_all.fastq &
+zcat JCH003C_index7_CAGATC_L006_R2_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/JCH003C_R2_all.fastq &
+zcat JCH003D_index16_CCGTCC_L006_R1_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/JCH003D_R1_all.fastq &
+zcat JCH003D_index16_CCGTCC_L006_R2_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/JCH003D_R2_all.fastq &
+zcat JCH003E_index18_GTCCGC_L006_R1_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/JCH003E_R1_all.fastq &
+zcat JCH003E_index18_GTCCGC_L006_R2_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/JCH003E_R2_all.fastq &
+zcat JCH003F_index19_GTGAAA_L006_R1_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/JCH003F_R1_all.fastq &
+zcat JCH003F_index19_GTGAAA_L006_R2_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/JCH003F_R2_all.fastq &
+zcat JCH003G_index5_ACAGTG_L006_R1_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/JCH003G_R1_all.fastq &
+zcat JCH003G_index5_ACAGTG_L006_R2_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/JCH003G_R2_all.fastq &
+zcat JCH003H_index6_GCCAAT_L006_R1_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/JCH003H_R1_all.fastq &
+zcat JCH003H_index6_GCCAAT_L006_R2_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/JCH003H_R2_all.fastq &
+zcat JCH003I_index12_CTTGTA_L006_R1_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/JCH003I_R1_all.fastq &
+zcat JCH003I_index12_CTTGTA_L006_R2_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/JCH003I_R2_all.fastq &
+zcat JCH003J_index13_AGTCAA_L006_R1_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/JCH003J_R1_all.fastq &
+zcat JCH003J_index13_AGTCAA_L006_R2_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/JCH003J_R2_all.fastq &
+
+##make genome BAM files for the RNA-seq data
+~/Scripts/RNAcallVariants.py -p JCH003A JCH003A_R1_all.fastq JCH003A_R2_all.fastq &
+~/Scripts/RNAcallVariants.py -p JCH003B JCH003B_R1_all.fastq JCH003B_R2_all.fastq &
+~/Scripts/RNAcallVariants.py -p JCH003C JCH003C_R1_all.fastq JCH003C_R2_all.fastq &
+~/Scripts/RNAcallVariants.py -p JCH003G JCH003G_R1_all.fastq JCH003G_R2_all.fastq &
+~/Scripts/RNAcallVariants.py -p JCH003H JCH003H_R1_all.fastq JCH003H_R2_all.fastq &
+
+##call variants from all the BAM files (for phasing/building personal transcriptomes)
+java -Djava.io.tmpdir=strach/ -jar ~/Programs/GenomeAnalysisTK-2.4-3-g2a7af43/GenomeAnalysisTK.jar -T UnifiedGenotyper --genotype_likelihoods_model BOTH -R ~/ReferenceGenomes/StickleMasked/stickleMasked.fa -I JCH003A_sorted_final_dedup.bam -I JCH003B_sorted_final_dedup.bam -I JCH003C_sorted_final_dedup.bam -I JCH003G_sorted_final_dedup.bam -I JCH003H_sorted_final_dedup.bam -I JCH002E_final.bam -I JCH002F_final.bam -o PAXB_VTP_RNA.vcf -stand_call_conf 30 -stand_emit_conf 30 &
+
+##make personal transcriptome (use strict for now)
+
+~/Scripts/MLASE.py -n JCH003A -s -v PAXB_VTP_RNA.vcf -f 0,1,2 &
+~/Scripts/MLASE.py -n JCH003B -s -v PAXB_VTP_RNA.vcf -f 0,1,3 &
+~/Scripts/MLASE.py -n JCH003C -s -v PAXB_VTP_RNA.vcf -f 0,1,4 &
+~/Scripts/MLASE.py -n JCH003G -s -v PAXB_VTP_RNA.vcf -f 0,1,5 &
+~/Scripts/MLASE.py -n JCH003H -s -v PAXB_VTP_RNA.vcf -f 0,1,6 &
+
+
+mkdir JCH003A_STAR
+mkdir JCH003B_STAR
+mkdir JCH003C_STAR
+mkdir JCH003G_STAR
+mkdir JCH003H_STAR
+
+STAR --runMode genomeGenerate --genomeDir JCH003A_STAR --genomeFastaFiles JCH003A_haplopairs.fa --runThreadN 4 --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003B_STAR --genomeFastaFiles JCH003B_haplopairs.fa --runThreadN 4 --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003C_STAR --genomeFastaFiles JCH003C_haplopairs.fa --runThreadN 4 --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003G_STAR --genomeFastaFiles JCH003G_haplopairs.fa --runThreadN 4 --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003H_STAR --genomeFastaFiles JCH003H_haplopairs.fa --runThreadN 4 --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+
+STAR --genomeDir JCH003A_STAR --readFilesIn JCH003A_R1_all.fastq JCH003A_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003A_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003B_STAR --readFilesIn JCH003B_R1_all.fastq JCH003B_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003B_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003C_STAR --readFilesIn JCH003C_R1_all.fastq JCH003C_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003C_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003G_STAR --readFilesIn JCH003G_R1_all.fastq JCH003G_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003G_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003H_STAR --readFilesIn JCH003H_R1_all.fastq JCH003H_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003H_STAR --outFilterMultimapScoreRange 1 &
+
+##use a trio for simulations
+
+~/Scripts/MLASE.py -n JCH003A_trio -t -v PAXB_VTP_RNA.vcf -f 0,1,2 &
+~/Scripts/MLASE.py -n JCH003B_trio -t -v PAXB_VTP_RNA.vcf -f 0,1,3 &
+~/Scripts/MLASE.py -n JCH003C_trio -t -v PAXB_VTP_RNA.vcf -f 0,1,4 &
+~/Scripts/MLASE.py -n JCH003G_trio -t -v PAXB_VTP_RNA.vcf -f 0,1,5 &
+~/Scripts/MLASE.py -n JCH003H_trio -t -v PAXB_VTP_RNA.vcf -f 0,1,6 &
+
+~/Scripts/zipVCFs.py vcflist.l > JCH003ABCGH_zip_phased.vcf
+
+##create a reference ASE truth
+~/Scripts/simRNAseq2.py -o JCH003A_sim -v 0 -e .01 -f .2 -n 50 /home/ctmiller/ReferenceGenomes/StickleUnmasked/stickleUnmasked.fa ../JCH003A_forced_cuff/transcripts.gtf ../JCH003A_trio_tempxp_phased.vcf &
+
+
+######################################
+##create a simulation (control for mapping errors/correct pipeline)
+###############################
+~/Scripts/simRNAseq2.py -o JCH003A_sim -v 0 -e .01 -f .2 -n 5000000 -a JCH003A_sim_ASE.l /home/ctmiller/ReferenceGenomes/StickleUnmasked/stickleUnmasked.fa ../JCH003A_forced_cuff/transcripts.gtf ../JCH003A_trio_tempxp_phased.vcf &
+~/Scripts/simRNAseq2.py -o JCH003B_sim -v 0 -e .01 -f .2 -n 5000000 -a JCH003A_sim_ASE.l /home/ctmiller/ReferenceGenomes/StickleUnmasked/stickleUnmasked.fa ../JCH003B_forced_cuff/transcripts.gtf ../JCH003B_trio_tempxp_phased.vcf &
+~/Scripts/simRNAseq2.py -o JCH003C_sim -v 0 -e .01 -f .2 -n 5000000 -a JCH003A_sim_ASE.l /home/ctmiller/ReferenceGenomes/StickleUnmasked/stickleUnmasked.fa ../JCH003C_forced_cuff/transcripts.gtf ../JCH003C_trio_tempxp_phased.vcf &
+~/Scripts/simRNAseq2.py -o JCH003G_sim -v 0 -e .01 -f .2 -n 5000000 -a JCH003A_sim_ASE.l /home/ctmiller/ReferenceGenomes/StickleUnmasked/stickleUnmasked.fa ../JCH003G_forced_cuff/transcripts.gtf ../JCH003G_trio_tempxp_phased.vcf &
+~/Scripts/simRNAseq2.py -o JCH003H_sim -v 0 -e .01 -f .2 -n 5000000 -a JCH003A_sim_ASE.l /home/ctmiller/ReferenceGenomes/StickleUnmasked/stickleUnmasked.fa ../JCH003H_forced_cuff/transcripts.gtf ../JCH003H_trio_tempxp_phased.vcf &
+
+~/Scripts/RNAcallVariants.py -p JCH003A_sim JCH003A_sim_r1.fq JCH003A_sim_r2.fq &
+~/Scripts/RNAcallVariants.py -p JCH003B_sim JCH003B_sim_r1.fq JCH003B_sim_r2.fq &
+~/Scripts/RNAcallVariants.py -p JCH003C_sim JCH003C_sim_r1.fq JCH003C_sim_r2.fq &
+~/Scripts/RNAcallVariants.py -p JCH003G_sim JCH003G_sim_r1.fq JCH003G_sim_r2.fq &
+~/Scripts/RNAcallVariants.py -p JCH003H_sim JCH003H_sim_r1.fq JCH003H_sim_r2.fq &
+
+
+##this re-genotyping step could be a problem (but it shouldn't as the only genotypes we care about are the parents
+
+java -Djava.io.tmpdir=strach/ -jar ~/Programs/GenomeAnalysisTK-2.4-3-g2a7af43/GenomeAnalysisTK.jar -T UnifiedGenotyper --genotype_likelihoods_model BOTH -R ~/ReferenceGenomes/StickleMasked/stickleMasked.fa -I JCH003A_sim_sorted_final_dedup.bam -I JCH003B_sim_sorted_final_dedup.bam -I JCH003C_sim_sorted_final_dedup.bam -I JCH003G_sim_sorted_final_dedup.bam -I JCH003H_sim_sorted_final_dedup.bam -I ../JCH002E_final.bam -I ../JCH002F_final.bam -o PAXB_VTP_RNA_sim.vcf -stand_call_conf 30 -stand_emit_conf 30 &
+
+~/Scripts/MLASE.py -n JCH003A_sim -s -v ../PAXB_VTP_RNA.vcf -f 0,1,2 &
+~/Scripts/MLASE.py -n JCH003B_sim -s -v ../PAXB_VTP_RNA.vcf -f 0,1,3 &
+~/Scripts/MLASE.py -n JCH003C_sim -s -v ../PAXB_VTP_RNA.vcf -f 0,1,4 &
+~/Scripts/MLASE.py -n JCH003G_sim -s -v ../PAXB_VTP_RNA.vcf -f 0,1,5 &
+~/Scripts/MLASE.py -n JCH003H_sim -s -v ../PAXB_VTP_RNA.vcf -f 0,1,6 &
+
+##differences in haplopairs.fa could be due to variant positions filtered by filter_bgl.py 
+##this shouldn't matter, as the phasing looks pretty solid
+
+mkdir JCH003A_sim_STAR
+mkdir JCH003B_sim_STAR
+mkdir JCH003C_sim_STAR
+mkdir JCH003G_sim_STAR
+mkdir JCH003H_sim_STAR
+
+STAR --runMode genomeGenerate --genomeDir JCH003A_sim_STAR --genomeFastaFiles JCH003A_sim_haplopairs.fa --runThreadN 4 --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003B_sim_STAR --genomeFastaFiles JCH003B_sim_haplopairs.fa --runThreadN 4 --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003C_sim_STAR --genomeFastaFiles JCH003C_sim_haplopairs.fa --runThreadN 4 --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003G_sim_STAR --genomeFastaFiles JCH003G_sim_haplopairs.fa --runThreadN 4 --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003H_sim_STAR --genomeFastaFiles JCH003H_sim_haplopairs.fa --runThreadN 4 --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+
+STAR --genomeDir JCH003A_sim_STAR --readFilesIn JCH003A_sim_r1.fq JCH003A_sim_r2.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003A_sim_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003B_sim_STAR --readFilesIn JCH003B_sim_r1.fq JCH003B_sim_r2.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003B_sim_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003C_sim_STAR --readFilesIn JCH003C_sim_r1.fq JCH003C_sim_r2.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003C_sim_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003G_sim_STAR --readFilesIn JCH003G_sim_r1.fq JCH003G_sim_r2.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003G_sim_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003H_sim_STAR --readFilesIn JCH003H_sim_r1.fq JCH003H_sim_r2.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003H_sim_STAR --outFilterMultimapScoreRange 1 &
+
+##this looks terrible - phasing looks like garbage
+##check_phasing says otherwise - > 99.9% agree with fixed variant parental positions
+
+
+
+##try simulating from the collapsed transcriptome:
+##generate a ASE reflist
+~/Scripts/simRNAseq2.py -o JCH003A_sim_collapsed -v 0 -e .01 -f .2 -n 5  /home/ctmiller/ReferenceGenomes/StickleUnmasked/stickleUnmasked.fa ../JCH003A_forced_collapsed_cuff/transcripts.gtf ../JCH003A_trio_tempxp_phased.vcf &
+
+
+~/Scripts/simRNAseq2.py -o JCH003A_sim_collapsed -v 0 -e .01 -f .2 -n 5000000 -a JCH003A_sim_collapsed_ASE.l /home/ctmiller/ReferenceGenomes/StickleUnmasked/stickleUnmasked.fa ../JCH003A_forced_collapsed_cuff/transcripts.gtf ../JCH003A_trio_tempxp_phased.vcf &
+~/Scripts/simRNAseq2.py -o JCH003B_sim_collapsed -v 0 -e .01 -f .2 -n 5000000 -a JCH003A_sim_collapsed_ASE.l /home/ctmiller/ReferenceGenomes/StickleUnmasked/stickleUnmasked.fa ../JCH003B_forced_collapsed_cuff/transcripts.gtf ../JCH003B_trio_tempxp_phased.vcf &
+~/Scripts/simRNAseq2.py -o JCH003C_sim_collapsed -v 0 -e .01 -f .2 -n 5000000 -a JCH003A_sim_collapsed_ASE.l /home/ctmiller/ReferenceGenomes/StickleUnmasked/stickleUnmasked.fa ../JCH003C_forced_collapsed_cuff/transcripts.gtf ../JCH003C_trio_tempxp_phased.vcf &
+~/Scripts/simRNAseq2.py -o JCH003G_sim_collapsed -v 0 -e .01 -f .2 -n 5000000 -a JCH003A_sim_collapsed_ASE.l /home/ctmiller/ReferenceGenomes/StickleUnmasked/stickleUnmasked.fa ../JCH003G_forced_collapsed_cuff/transcripts.gtf ../JCH003G_trio_tempxp_phased.vcf &
+~/Scripts/simRNAseq2.py -o JCH003H_sim_collapsed -v 0 -e .01 -f .2 -n 5000000 -a JCH003A_sim_collapsed_ASE.l /home/ctmiller/ReferenceGenomes/StickleUnmasked/stickleUnmasked.fa ../JCH003H_forced_collapsed_cuff/transcripts.gtf ../JCH003H_trio_tempxp_phased.vcf &
+
+
+~/Scripts/RNAcallVariants.py -p JCH003A_sim_collapsed JCH003A_sim_collapsed_r1.fq JCH003A_sim_collapsed_r2.fq &
+~/Scripts/RNAcallVariants.py -p JCH003B_sim_collapsed JCH003B_sim_collapsed_r1.fq JCH003B_sim_collapsed_r2.fq &
+~/Scripts/RNAcallVariants.py -p JCH003C_sim_collapsed JCH003C_sim_collapsed_r1.fq JCH003C_sim_collapsed_r2.fq &
+~/Scripts/RNAcallVariants.py -p JCH003G_sim_collapsed JCH003G_sim_collapsed_r1.fq JCH003G_sim_collapsed_r2.fq &
+~/Scripts/RNAcallVariants.py -p JCH003H_sim_collapsed JCH003H_sim_collapsed_r1.fq JCH003H_sim_collapsed_r2.fq &
+
+java -Djava.io.tmpdir=strach/ -jar ~/Programs/GenomeAnalysisTK-2.4-3-g2a7af43/GenomeAnalysisTK.jar -T UnifiedGenotyper --genotype_likelihoods_model BOTH -R ~/ReferenceGenomes/StickleMasked/stickleMasked.fa -I JCH003A_sim_collapsed_sorted_final_dedup.bam -I JCH003B_sim_collapsed_sorted_final_dedup.bam -I JCH003C_sim_collapsed_sorted_final_dedup.bam -I JCH003G_sim_collapsed_sorted_final_dedup.bam -I JCH003H_sim_collapsed_sorted_final_dedup.bam -I ../JCH002E_final.bam -I ../JCH002F_final.bam -o PAXB_VTP_RNA_sim.vcf -stand_call_conf 30 -stand_emit_conf 30 &
+
+~/Scripts/MLASE.py -n JCH003A_sim_collapsed -s -v PAXB_VTP_RNA_sim.vcf -f 0,1,2 &
+~/Scripts/MLASE.py -n JCH003B_sim_collapsed -s -v PAXB_VTP_RNA_sim.vcf -f 0,1,3 &
+~/Scripts/MLASE.py -n JCH003C_sim_collapsed -s -v PAXB_VTP_RNA_sim.vcf -f 0,1,4 &
+~/Scripts/MLASE.py -n JCH003G_sim_collapsed -s -v PAXB_VTP_RNA_sim.vcf -f 0,1,5 &
+~/Scripts/MLASE.py -n JCH003H_sim_collapsed -s -v PAXB_VTP_RNA_sim.vcf -f 0,1,6 &
+
+~/Scripts/MLASE.py -n JCH003A_sim_collapsed_trio -t -v PAXB_VTP_RNA_sim.vcf -f 0,1,2 &
+~/Scripts/MLASE.py -n JCH003B_sim_collapsed_trio -t -v PAXB_VTP_RNA_sim.vcf -f 0,1,3 &
+~/Scripts/MLASE.py -n JCH003C_sim_collapsed_trio -t -v PAXB_VTP_RNA_sim.vcf -f 0,1,4 &
+~/Scripts/MLASE.py -n JCH003G_sim_collapsed_trio -t -v PAXB_VTP_RNA_sim.vcf -f 0,1,5 &
+~/Scripts/MLASE.py -n JCH003H_sim_collapsed_trio -t -v PAXB_VTP_RNA_sim.vcf -f 0,1,6 &
+
+mkdir JCH003A_sim_collapsed_STAR
+mkdir JCH003B_sim_collapsed_STAR
+mkdir JCH003C_sim_collapsed_STAR
+mkdir JCH003G_sim_collapsed_STAR
+mkdir JCH003H_sim_collapsed_STAR
+
+STAR --runMode genomeGenerate --genomeDir JCH003A_sim_collapsed_STAR --genomeFastaFiles JCH003A_sim_collapsed_haplopairs.fa --runThreadN 4 --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003B_sim_collapsed_STAR --genomeFastaFiles JCH003B_sim_collapsed_haplopairs.fa --runThreadN 4 --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003C_sim_collapsed_STAR --genomeFastaFiles JCH003C_sim_collapsed_haplopairs.fa --runThreadN 4 --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003G_sim_collapsed_STAR --genomeFastaFiles JCH003G_sim_collapsed_haplopairs.fa --runThreadN 4 --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003H_sim_collapsed_STAR --genomeFastaFiles JCH003H_sim_collapsed_haplopairs.fa --runThreadN 4 --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+
+STAR --genomeDir JCH003A_sim_STAR --readFilesIn JCH003A_sim_collapsed_r1.fq JCH003A_sim_collapsed_r2.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003A_sim_collapsed_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003B_sim_STAR --readFilesIn JCH003B_sim_collapsed_r1.fq JCH003B_sim_collapsed_r2.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003B_sim_collapsed_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003C_sim_STAR --readFilesIn JCH003C_sim_collapsed_r1.fq JCH003C_sim_collapsed_r2.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003C_sim_collapsed_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003G_sim_STAR --readFilesIn JCH003G_sim_collapsed_r1.fq JCH003G_sim_collapsed_r2.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003G_sim_collapsed_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003H_sim_STAR --readFilesIn JCH003H_sim_collapsed_r1.fq JCH003H_sim_collapsed_r2.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003H_sim_collapsed_STAR --outFilterMultimapScoreRange 1 &
+
+
+samtools mpileup -D -f /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa JCH003A_sim_collapsed_sorted_final_dedup.bam JCH003B_sim_collapsed_sorted_final_dedup.bam JCH003C_sim_collapsed_sorted_final_dedup.bam JCH003G_sim_collapsed_sorted_final_dedup.bam JCH003H_sim_collapsed_sorted_final_dedup.bam > JCH003ABCGH_sim_collapsed.pileup &
+
+
+samtools mpileup -E -D -f /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -l /data/James/BED/ensGene_collapsed.gtf JCH003A_sim_collapsed_sorted_final_dedup.bam JCH003B_sim_collapsed_sorted_final_dedup.bam JCH003C_sim_collapsed_sorted_final_dedup.bam JCH003G_sim_collapsed_sorted_final_dedup.bam JCH003H_sim_collapsed_sorted_final_dedup.bam > JCH003ABCGH_sim_collapsed_genes.pileup &
+
+
+
+
+######################################################################################################################
+PAXB_BS                                                    ###########################################################
+######################################################################################################################
+
+
+zcat JCH001D_index2_CGATGT_L006_R1*.fastq.gz > /data/James/AlleleSpecificExpression/PAXB_BS/JCH001D_R1_all.fastq &
+zcat JCH001D_index2_CGATGT_L006_R2*.fastq.gz > /data/James/AlleleSpecificExpression/PAXB_BS/JCH001D_R2_all.fastq &
+zcat JCH001E_index15_ATGTCA_L006_R1*.fastq.gz > /data/James/AlleleSpecificExpression/PAXB_BS/JCH001E_R1_all.fastq &
+zcat JCH001E_index15_ATGTCA_L006_R2*.fastq.gz > /data/James/AlleleSpecificExpression/PAXB_BS/JCH001E_R2_all.fastq &
+zcat JCH001F_index18_GTCCGC_L006_R1*.fastq.gz > /data/James/AlleleSpecificExpression/PAXB_BS/JCH001F_R1_all.fastq &
+zcat JCH001F_index18_GTCCGC_L006_R2*.fastq.gz > /data/James/AlleleSpecificExpression/PAXB_BS/JCH001F_R2_all.fastq &
+
+zcat JCH003K_index14_AGTTCC_L006_R1_*.fastq.gz > /data/James/AlleleSpecificExpression/PAXB_BS/JCH003K_R1_all.fastq &
+zcat JCH003K_index14_AGTTCC_L006_R2_*.fastq.gz > /data/James/AlleleSpecificExpression/PAXB_BS/JCH003K_R2_all.fastq &
+zcat JCH003L_index15_ATGTCA_L006_R1_*.fastq.gz > /data/James/AlleleSpecificExpression/PAXB_BS/JCH003L_R1_all.fastq &
+zcat JCH003L_index15_ATGTCA_L006_R2_*.fastq.gz > /data/James/AlleleSpecificExpression/PAXB_BS/JCH003L_R2_all.fastq &
+
+~/Scripts/RNAcallVariants.py -p JCH001D JCH001D_R1_all.fastq JCH001D_R2_all.fastq &
+~/Scripts/RNAcallVariants.py -p JCH001E JCH001E_R1_all.fastq JCH001E_R2_all.fastq &
+~/Scripts/RNAcallVariants.py -p JCH001F JCH001F_R1_all.fastq JCH001F_R2_all.fastq &
+~/Scripts/RNAcallVariants.py -p JCH003K JCH003K_R1_all.fastq JCH003K_R2_all.fastq &
+~/Scripts/RNAcallVariants.py -p JCH003L JCH003L_R1_all.fastq JCH003L_R2_all.fastq &
+
+java -Djava.io.tmpdir=strach/ -jar ~/Programs/GenomeAnalysisTK-2.4-3-g2a7af43/GenomeAnalysisTK.jar -T UnifiedGenotyper --genotype_likelihoods_model BOTH -R ~/ReferenceGenomes/StickleMasked/stickleMasked.fa -I JCH001D_sorted_final_dedup.bam -I JCH001E_sorted_final_dedup.bam -I JCH001F_sorted_final_dedup.bam -I JCH003K_sorted_final_dedup.bam -I JCH003L_sorted_final_dedup.bam -I ../VTP/JCH002E_final.bam -I ../VTP/JCH002F_final.bam -o PAXB_BS_RNA.vcf -stand_call_conf 30 -stand_emit_conf 30 &
+
+~/Scripts/MLASE.py -n JCH001D -s -v PAXB_BS_RNA.vcf -f 3,4,0 &
+~/Scripts/MLASE.py -n JCH001E -s -v PAXB_BS_RNA.vcf -f 3,4,1 &
+~/Scripts/MLASE.py -n JCH001F -s -v PAXB_BS_RNA.vcf -f 3,4,2 &
+~/Scripts/MLASE.py -n JCH003K -s -v PAXB_BS_RNA.vcf -f 3,4,5 &
+~/Scripts/MLASE.py -n JCH003L -s -v PAXB_BS_RNA.vcf -f 3,4,6 &
+
+~/Scripts/MLASE.py -n JCH001D_trio -t -v PAXB_BS_RNA.vcf -f 3,4,0 &
+~/Scripts/MLASE.py -n JCH001E_trio -t -v PAXB_BS_RNA.vcf -f 3,4,1 &
+~/Scripts/MLASE.py -n JCH001F_trio -t -v PAXB_BS_RNA.vcf -f 3,4,2 &
+~/Scripts/MLASE.py -n JCH003K_trio -t -v PAXB_BS_RNA.vcf -f 3,4,5 &
+~/Scripts/MLASE.py -n JCH003L_trio -t -v PAXB_BS_RNA.vcf -f 3,4,6 &
+
+
+##I want to get a mean and a confidence interval to estimate ASE for each gene
+This cannot be normally distributed, as I would expect assymatry on the bounds (expression divergence is not uniform, likely?)
+
+
+cufflinks --library-type fr-firststrand -o JCH001D_cuff -g /data/James/BED/ensGene.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH001D_sorted_final_dedup.bam &
+cufflinks --library-type fr-firststrand -o JCH001E_cuff -g /data/James/BED/ensGene.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH001E_sorted_final_dedup.bam &
+cufflinks --library-type fr-firststrand -o JCH001F_cuff -g /data/James/BED/ensGene.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH001F_sorted_final_dedup.bam &
+cufflinks --library-type fr-firststrand -o JCH003K_cuff -g /data/James/BED/ensGene.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH003K_sorted_final_dedup.bam &
+cufflinks --library-type fr-firststrand -o JCH003L_cuff -g /data/James/BED/ensGene.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH003L_sorted_final_dedup.bam &
+
+cufflinks --library-type fr-firststrand -o JCH001D_forced_cuff -G /data/James/BED/ensGene.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH001D_sorted_final_dedup.bam &
+cufflinks --library-type fr-firststrand -o JCH001E_forced_cuff -G /data/James/BED/ensGene.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH001E_sorted_final_dedup.bam &
+cufflinks --library-type fr-firststrand -o JCH001F_forced_cuff -G /data/James/BED/ensGene.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH001F_sorted_final_dedup.bam &
+cufflinks --library-type fr-firststrand -o JCH003K_forced_cuff -G /data/James/BED/ensGene.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH003K_sorted_final_dedup.bam &
+cufflinks --library-type fr-firststrand -o JCH003L_forced_cuff -G /data/James/BED/ensGene.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH003L_sorted_final_dedup.bam &
+
+
+
+
+######################################
+##create a simulation (control for mapping errors/correct pipeline)
+###############################
+~/Scripts/simRNAseq2.py -o JCH001D_sim -v 0 -e .01 -f .2 -n 500 /home/ctmiller/ReferenceGenomes/StickleUnmasked/stickleUnmasked.fa ../JCH001D_forced_cuff/transcripts.gtf ../JCH001D_trio_tempxp_phased.vcf &
+
+
+
+~/Scripts/simRNAseq2.py -o JCH001D_sim -v 0 -e .01 -f .2 -n 5000000 -a JCH001D_sim_ASE.l /home/ctmiller/ReferenceGenomes/StickleUnmasked/stickleUnmasked.fa ../JCH001D_forced_cuff/transcripts.gtf ../JCH001D_trio_tempxp_phased.vcf &
+~/Scripts/simRNAseq2.py -o JCH001E_sim -v 0 -e .01 -f .2 -n 5000000 -a JCH001D_sim_ASE.l /home/ctmiller/ReferenceGenomes/StickleUnmasked/stickleUnmasked.fa ../JCH001E_forced_cuff/transcripts.gtf ../JCH001E_trio_tempxp_phased.vcf &
+~/Scripts/simRNAseq2.py -o JCH001F_sim -v 0 -e .01 -f .2 -n 5000000 -a JCH001D_sim_ASE.l /home/ctmiller/ReferenceGenomes/StickleUnmasked/stickleUnmasked.fa ../JCH001F_forced_cuff/transcripts.gtf ../JCH001F_trio_tempxp_phased.vcf &
+~/Scripts/simRNAseq2.py -o JCH003K_sim -v 0 -e .01 -f .2 -n 5000000 -a JCH001D_sim_ASE.l /home/ctmiller/ReferenceGenomes/StickleUnmasked/stickleUnmasked.fa ../JCH003K_forced_cuff/transcripts.gtf ../JCH003K_trio_tempxp_phased.vcf &
+~/Scripts/simRNAseq2.py -o JCH003L_sim -v 0 -e .01 -f .2 -n 5000000 -a JCH001D_sim_ASE.l /home/ctmiller/ReferenceGenomes/StickleUnmasked/stickleUnmasked.fa ../JCH003L_forced_cuff/transcripts.gtf ../JCH003L_trio_tempxp_phased.vcf &
+
+
+
+
+~/Scripts/RNAcallVariants.py -p JCH001D_sim JCH001D_sim_r1.fq JCH001D_sim_r2.fq &
+~/Scripts/RNAcallVariants.py -p JCH001E_sim JCH001E_sim_r1.fq JCH001E_sim_r2.fq &
+~/Scripts/RNAcallVariants.py -p JCH001F_sim JCH001F_sim_r1.fq JCH001F_sim_r2.fq &
+~/Scripts/RNAcallVariants.py -p JCH003K_sim JCH003K_sim_r1.fq JCH003K_sim_r2.fq &
+~/Scripts/RNAcallVariants.py -p JCH003L_sim JCH003L_sim_r1.fq JCH003L_sim_r2.fq 
+
+sleep -h 1
+
+
+
+java -Djava.io.tmpdir=strach/ -jar ~/Programs/GenomeAnalysisTK-2.4-3-g2a7af43/GenomeAnalysisTK.jar -T UnifiedGenotyper --genotype_likelihoods_model BOTH -R ~/ReferenceGenomes/StickleMasked/stickleMasked.fa -I JCH001D_sim_sorted_final_dedup.bam -I JCH001E_sim_sorted_final_dedup.bam -I JCH001F_sim_sorted_final_dedup.bam -I JCH003K_sim_sorted_final_dedup.bam -I JCH003L_sim_sorted_final_dedup.bam -I ../../VTP/JCH002E_final.bam -I ../../VTP/JCH002F_final.bam -o PAXB_BS_RNA_sim.vcf -stand_call_conf 30 -stand_emit_conf 30 
+
+~/Scripts/MLASE.py -n JCH001D_sim -s -v PAXB_BS_RNA_sim.vcf -f 3,4,0 &
+~/Scripts/MLASE.py -n JCH001E_sim -s -v PAXB_BS_RNA_sim.vcf -f 3,4,1 &
+~/Scripts/MLASE.py -n JCH001F_sim -s -v PAXB_BS_RNA_sim.vcf -f 3,4,2 &
+~/Scripts/MLASE.py -n JCH003K_sim -s -v PAXB_BS_RNA_sim.vcf -f 3,4,5 &
+~/Scripts/MLASE.py -n JCH003L_sim -s -v PAXB_BS_RNA_sim.vcf -f 3,4,6 
+
+sleep -m 5
+
+mkdir JCH001D_sim_STAR
+mkdir JCH001E_sim_STAR
+mkdir JCH001F_sim_STAR
+mkdir JCH003K_sim_STAR
+mkdir JCH003L_sim_STAR
+
+
+
+STAR --runMode genomeGenerate --genomeDir JCH001D_sim_STAR --genomeFastaFiles JCH001D_sim_haplopairs.fa --runThreadN 4 --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH001E_sim_STAR --genomeFastaFiles JCH001E_sim_haplopairs.fa --runThreadN 4 --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH001F_sim_STAR --genomeFastaFiles JCH001F_sim_haplopairs.fa --runThreadN 4 --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003K_sim_STAR --genomeFastaFiles JCH003K_sim_haplopairs.fa --runThreadN 4 --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003L_sim_STAR --genomeFastaFiles JCH003L_sim_haplopairs.fa --runThreadN 4 --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 
+
+sleep -m 1
+
+STAR --genomeDir JCH001D_sim_STAR --readFilesIn JCH001D_sim_r1.fq JCH001D_sim_r2.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH001D_sim_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH001E_sim_STAR --readFilesIn JCH001E_sim_r1.fq JCH001E_sim_r2.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH001E_sim_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH001F_sim_STAR --readFilesIn JCH001F_sim_r1.fq JCH001F_sim_r2.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH001F_sim_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003K_sim_STAR --readFilesIn JCH003K_sim_r1.fq JCH003K_sim_r2.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003K_sim_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003L_sim_STAR --readFilesIn JCH003L_sim_r1.fq JCH003L_sim_r2.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003L_sim_STAR --outFilterMultimapScoreRange 1 &
+
+#########################################################################################################################################
+8/13/14 Final ASE pipeline replicate                                                           ##########################################
+#########################################################################################################################################
+#########################################################################################################################################
+
+
+##First, we need to realign all the VTP bam files, then call SNPs on the resulting final.bam files
+##first we acutally need to run cufflinks to generate expression data
+##might want to have run simRNAseq on the filered vcf files, w/e too late now
+
+##runing in @seeing
+cufflinks --library-type fr-firststrand -o JCH003A_forced_collapsed_cuff -G /data/James/BED/ensGene_collapsed.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH003A_final.bam &
+cufflinks --library-type fr-firststrand -o JCH003B_forced_collapsed_cuff -G /data/James/BED/ensGene_collapsed.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH003B_final.bam &
+cufflinks --library-type fr-firststrand -o JCH003C_forced_collapsed_cuff -G /data/James/BED/ensGene_collapsed.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH003C_final.bam &
+cufflinks --library-type fr-firststrand -o JCH003G_forced_collapsed_cuff -G /data/James/BED/ensGene_collapsed.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH003G_final.bam &
+cufflinks --library-type fr-firststrand -o JCH003H_forced_collapsed_cuff -G /data/James/BED/ensGene_collapsed.gtf -b /home/ctmiller/ReferenceGenomes/StickleMasked/stickleMasked.fa -u JCH003H_final.bam 
+
+RNA_bam.sh -b=JCH003A_final &
+RNA_bam.sh -b=JCH003B_final &
+RNA_bam.sh -b=JCH003C_final &
+RNA_bam.sh -b=JCH003G_final 
+RNA_bam.sh -b=JCH003H_final
+
+java -Djava.io.tmpdir=strach/ -jar ~/Programs/GenomeAnalysisTK.jar -T UnifiedGenotyper -U ALLOW_N_CIGAR_READS -OQ --genotype_likelihoods_model BOTH -R ~/ReferenceGenomes/StickleMasked/stickleMasked.fa -I JCH003A_final_recalibrated.bam -I JCH003B_final_recalibrated.bam -I JCH003C_final_recalibrated.bam -I JCH003G_final_recalibrated.bam -I JCH003H_final_recalibrated.bam -I ../simVTP/JCH002E_final_recalibrated.bam -I ../simVTP/JCH002F_final_recalibrated.bam -o PAXB_VTP_RNA_final.vcf -stand_call_conf 25 -stand_emit_conf 25 
+
+
+diplome.sh -v=PAXB_VTP_RNA_final.vcf -f=0 -m=1 -c=2 -p=JCH003A_haplopairs &
+diplome.sh -v=PAXB_VTP_RNA_final.vcf -f=0 -m=1 -c=3 -p=JCH003B_haplopairs &
+diplome.sh -v=PAXB_VTP_RNA_final.vcf -f=0 -m=1 -c=4 -p=JCH003C_haplopairs &
+diplome.sh -v=PAXB_VTP_RNA_final.vcf -f=0 -m=1 -c=5 -p=JCH003G_haplopairs
+diplome.sh -v=PAXB_VTP_RNA_final.vcf -f=0 -m=1 -c=6 -p=JCH003H_haplopairs 
+
+cd ../simVTP
+
+
+~/Scripts/simRNAseq2.py -o JCH003A_sim -v 0 -e .01 -f .2 -n 500 /home/ctmiller/ReferenceGenomes/StickleUnmasked/stickleUnmasked.fa /data/James/AlleleSpecificExpression/VTP/JCH003A_forced_collapsed_cuff/transcripts.gtf /data/James/AlleleSpecificExpression/VTP/JCH003A_haplopairs_phased.vcf 
+
+~/Scripts/simRNAseq2.py -o JCH003A_sim -v 0 -e .01 -f .2 -n 10000000 -a JCH003A_sim_ASE.l /home/ctmiller/ReferenceGenomes/StickleUnmasked/stickleUnmasked.fa /data/James/AlleleSpecificExpression/VTP/JCH003A_forced_collapsed_cuff/transcripts.gtf /data/James/AlleleSpecificExpression/VTP/JCH003A_haplopairs_phased.vcf &
+~/Scripts/simRNAseq2.py -o JCH003B_sim -v 0 -e .01 -f .2 -n 10000000 -a JCH003A_sim_ASE.l /home/ctmiller/ReferenceGenomes/StickleUnmasked/stickleUnmasked.fa /data/James/AlleleSpecificExpression/VTP/JCH003B_forced_collapsed_cuff/transcripts.gtf /data/James/AlleleSpecificExpression/VTP/JCH003B_haplopairs_phased.vcf &
+~/Scripts/simRNAseq2.py -o JCH003C_sim -v 0 -e .01 -f .2 -n 10000000 -a JCH003A_sim_ASE.l /home/ctmiller/ReferenceGenomes/StickleUnmasked/stickleUnmasked.fa /data/James/AlleleSpecificExpression/VTP/JCH003C_forced_collapsed_cuff/transcripts.gtf /data/James/AlleleSpecificExpression/VTP/JCH003C_haplopairs_phased.vcf &
+~/Scripts/simRNAseq2.py -o JCH003G_sim -v 0 -e .01 -f .2 -n 10000000 -a JCH003A_sim_ASE.l /home/ctmiller/ReferenceGenomes/StickleUnmasked/stickleUnmasked.fa /data/James/AlleleSpecificExpression/VTP/JCH003G_forced_collapsed_cuff/transcripts.gtf /data/James/AlleleSpecificExpression/VTP/JCH003G_haplopairs_phased.vcf 
+~/Scripts/simRNAseq2.py -o JCH003H_sim -v 0 -e .01 -f .2 -n 10000000 -a JCH003A_sim_ASE.l /home/ctmiller/ReferenceGenomes/StickleUnmasked/stickleUnmasked.fa /data/James/AlleleSpecificExpression/VTP/JCH003H_forced_collapsed_cuff/transcripts.gtf /data/James/AlleleSpecificExpression/VTP/JCH003H_haplopairs_phased.vcf 
+
+STAR_RNA.sh -1=JCH003A_sim_r1.fq -2=JCH003A_sim_r2.fq -p=JCH003A_sim &
+STAR_RNA.sh -1=JCH003B_sim_r1.fq -2=JCH003B_sim_r2.fq -p=JCH003B_sim &
+STAR_RNA.sh -1=JCH003C_sim_r1.fq -2=JCH003C_sim_r2.fq -p=JCH003C_sim &
+STAR_RNA.sh -1=JCH003G_sim_r1.fq -2=JCH003G_sim_r2.fq -p=JCH003G_sim 
+STAR_RNA.sh -1=JCH003H_sim_r1.fq -2=JCH003H_sim_r2.fq -p=JCH003H_sim 
+
+RNA_bam.sh -b=JCH003A_sim_final &
+RNA_bam.sh -b=JCH003B_sim_final &
+RNA_bam.sh -b=JCH003C_sim_final &
+RNA_bam.sh -b=JCH003G_sim_final 
+RNA_bam.sh -b=JCH003H_sim_final
+
+
+java -Djava.io.tmpdir=strach/ -jar ~/Programs/GenomeAnalysisTK.jar -T UnifiedGenotyper -U ALLOW_N_CIGAR_READS -OQ --genotype_likelihoods_model BOTH -R ~/ReferenceGenomes/StickleMasked/stickleMasked.fa -I JCH003A_sim_final_recalibrated.bam -I JCH003B_sim_final_recalibrated.bam -I JCH003C_sim_final_recalibrated.bam -I JCH003G_sim_final_recalibrated.bam -I JCH003H_sim_final_recalibrated.bam -I JCH002E_final_recalibrated.bam -I JCH002F_final_recalibrated.bam -o sim_PAXB_VTP_RNA_final.vcf -stand_call_conf 25 -stand_emit_conf 25 
+
+diplome.sh -v=sim_PAXB_VTP_RNA_final.vcf -f=0 -m=1 -c=2 -p=JCH003A_sim_haplopairs &
+diplome.sh -v=sim_PAXB_VTP_RNA_final.vcf -f=0 -m=1 -c=3 -p=JCH003B_sim_haplopairs &
+diplome.sh -v=sim_PAXB_VTP_RNA_final.vcf -f=0 -m=1 -c=4 -p=JCH003C_sim_haplopairs &
+diplome.sh -v=sim_PAXB_VTP_RNA_final.vcf -f=0 -m=1 -c=5 -p=JCH003G_sim_haplopairs
+diplome.sh -v=sim_PAXB_VTP_RNA_final.vcf -f=0 -m=1 -c=6 -p=JCH003H_sim_haplopairs 
+
+mkdir JCH003A_sim_STAR
+mkdir JCH003B_sim_STAR
+mkdir JCH003C_sim_STAR
+mkdir JCH003G_sim_STAR
+mkdir JCH003H_sim_STAR
+
+STAR --runMode genomeGenerate --genomeDir JCH003A_sim_STAR --genomeFastaFiles JCH003A_sim_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003B_sim_STAR --genomeFastaFiles JCH003B_sim_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003C_sim_STAR --genomeFastaFiles JCH003C_sim_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003G_sim_STAR --genomeFastaFiles JCH003G_sim_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 
+STAR --runMode genomeGenerate --genomeDir JCH003H_sim_STAR --genomeFastaFiles JCH003H_sim_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 
+
+
+
+STAR --genomeDir JCH003A_sim_STAR --readFilesIn JCH003A_sim_r1.fq JCH003A_sim_r2.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003A_sim_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003B_sim_STAR --readFilesIn JCH003B_sim_r1.fq JCH003B_sim_r2.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003B_sim_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003C_sim_STAR --readFilesIn JCH003C_sim_r1.fq JCH003C_sim_r2.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003C_sim_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003G_sim_STAR --readFilesIn JCH003G_sim_r1.fq JCH003G_sim_r2.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003G_sim_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003H_sim_STAR --readFilesIn JCH003H_sim_r1.fq JCH003H_sim_r2.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003H_sim_STAR --outFilterMultimapScoreRange 1 &
+
+###############
+R2 = .90, 
+TP=832 FP=54 Total_ASE=1185 Missed=353
+
+
+Lets run this on real data, VTP and BS
+###########
+mkdir JCH003A_haplopairs_STAR
+mkdir JCH003B_haplopairs_STAR
+mkdir JCH003C_haplopairs_STAR
+mkdir JCH003G_haplopairs_STAR
+mkdir JCH003H_haplopairs_STAR
+
+STAR --runMode genomeGenerate --genomeDir JCH003A_haplopairs_STAR --genomeFastaFiles JCH003A_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003B_haplopairs_STAR --genomeFastaFiles JCH003B_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003C_haplopairs_STAR --genomeFastaFiles JCH003C_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003G_haplopairs_STAR --genomeFastaFiles JCH003G_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 
+STAR --runMode genomeGenerate --genomeDir JCH003H_haplopairs_STAR --genomeFastaFiles JCH003H_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 
+
+
+STAR --genomeDir JCH003A_haplopairs_STAR --readFilesIn JCH003A_R1_all.fastq JCH003A_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003A_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003B_haplopairs_STAR --readFilesIn JCH003B_R1_all.fastq JCH003B_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003B_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003C_haplopairs_STAR --readFilesIn JCH003C_R1_all.fastq JCH003C_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003C_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003G_haplopairs_STAR --readFilesIn JCH003G_R1_all.fastq JCH003G_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003G_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003H_haplopairs_STAR --readFilesIn JCH003H_R1_all.fastq JCH003H_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003H_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+
+##run RNA realignment to call variants from the BAM files in PAXB_BS
+RNA_bam.sh -b=JCH001D_final &
+RNA_bam.sh -b=JCH001E_final &
+RNA_bam.sh -b=JCH001F_final &
+RNA_bam.sh -b=JCH003K_final &
+RNA_bam.sh -b=JCH003L_final
+
+java -Djava.io.tmpdir=strach/ -jar ~/Programs/GenomeAnalysisTK.jar -T UnifiedGenotyper -U ALLOW_N_CIGAR_READS --genotype_likelihoods_model BOTH -R ~/ReferenceGenomes/StickleMasked/stickleMasked.fa -I JCH001D_final_recalibrated.bam -I JCH001E_final_recalibrated.bam -I JCH001F_final_recalibrated.bam -I JCH003K_final_recalibrated.bam -I JCH003L_final_recalibrated.bam -I ../simVTP/JCH002E_final_recalibrated.bam -I ../simVTP/JCH002F_final_recalibrated.bam -o PAXB_BS_RNA_final.vcf -stand_call_conf 25 -stand_emit_conf 25 
+
+diplome.sh -v=PAXB_BS_RNA_final.vcf -f=3 -m=4 -c=0 -p=JCH001D_haplopairs &
+diplome.sh -v=PAXB_BS_RNA_final.vcf -f=3 -m=4 -c=1 -p=JCH001E_haplopairs &
+diplome.sh -v=PAXB_BS_RNA_final.vcf -f=3 -m=4 -c=2 -p=JCH001F_haplopairs 
+diplome.sh -v=PAXB_BS_RNA_final.vcf -f=3 -m=4 -c=5 -p=JCH003K_haplopairs
+diplome.sh -v=PAXB_BS_RNA_final.vcf -f=3 -m=4 -c=6 -p=JCH003L_haplopairs 
+
+mkdir JCH001D_haplopairs_STAR
+mkdir JCH001E_haplopairs_STAR
+mkdir JCH001F_haplopairs_STAR
+mkdir JCH003K_haplopairs_STAR
+mkdir JCH003L_haplopairs_STAR
+
+STAR --runMode genomeGenerate --genomeDir JCH001D_haplopairs_STAR --genomeFastaFiles JCH001D_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH001E_haplopairs_STAR --genomeFastaFiles JCH001E_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH001F_haplopairs_STAR --genomeFastaFiles JCH001F_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003K_haplopairs_STAR --genomeFastaFiles JCH003K_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 
+STAR --runMode genomeGenerate --genomeDir JCH003L_haplopairs_STAR --genomeFastaFiles JCH003L_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 
+
+
+STAR --genomeDir JCH001D_haplopairs_STAR --readFilesIn JCH001D_R1_all.fastq JCH001D_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH001D_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH001E_haplopairs_STAR --readFilesIn JCH001E_R1_all.fastq JCH001E_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH001E_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH001F_haplopairs_STAR --readFilesIn JCH001F_R1_all.fastq JCH001F_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH001F_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003K_haplopairs_STAR --readFilesIn JCH003K_R1_all.fastq JCH003K_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003K_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003L_haplopairs_STAR --readFilesIn JCH003L_R1_all.fastq JCH003L_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003L_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+
+
+
+##qc metrics
+samtools view -c -F 260 JCH003A_aligned.bam >> wc_aligned.txt &
+samtools view -c -F 260 JCH003B_aligned.bam >> wc_aligned.txt &
+samtools view -c -F 260 JCH003C_aligned.bam >> wc_aligned.txt &
+samtools view -c -F 260 JCH003G_aligned.bam >> wc_aligned.txt &
+samtools view -c -F 260 JCH003H_aligned.bam >> wc_aligned.txt &
+
+samtools view -c -F 260 JCH003A_final.bam >> wc_final.txt &
+samtools view -c -F 260 JCH003B_final.bam >> wc_final.txt &
+samtools view -c -F 260 JCH003C_final.bam >> wc_final.txt &
+samtools view -c -F 260 JCH003G_final.bam >> wc_final.txt &
+samtools view -c -F 260 JCH003H_final.bam >> wc_final.txt &
+
+
+samtools view -c -F 260 JCH001D_aligned.bam >> wc_aligned.txt &
+samtools view -c -F 260 JCH001E_aligned.bam >> wc_aligned.txt &
+samtools view -c -F 260 JCH001F_aligned.bam >> wc_aligned.txt &
+samtools view -c -F 260 JCH003K_aligned.bam >> wc_aligned.txt &
+samtools view -c -F 260 JCH003L_aligned.bam >> wc_aligned.txt &
+
+samtools view -c -F 260 JCH001D_final.bam >> wc_final.txt &
+samtools view -c -F 260 JCH001E_final.bam >> wc_final.txt &
+samtools view -c -F 260 JCH001F_final.bam >> wc_final.txt &
+samtools view -c -F 260 JCH003K_final.bam >> wc_final.txt &
+samtools view -c -F 260 JCH003L_final.bam >> wc_final.txt &
+
+intersectBed -abam JCH003A_final.bam -b /data/James/BED/ensGene.gtf -u | wc
+5663838 32572393 1445250668
+intersectBed -abam JCH003B_final.bam -b /data/James/BED/ensGene.gtf -u | wc
+4007379 22762716 1010989020
+intersectBed -abam JCH003C_final.bam -b /data/James/BED/ensGene.gtf -u | wc
+3140044 17488202 777816384
+intersectBed -abam JCH003G_final.bam -b /data/James/BED/ensGene.gtf -u | wc
+4907263 27841878 1237471507
+intersectBed -abam JCH003H_final.bam -b /data/James/BED/ensGene.gtf -u | wc
+3817729 21771306 965977543
+
+
+
+##now lets do CERC
+
+cp AG07A_final.bam /data/James/AlleleSpecificExpression/VTP &
+
+
+zcat JCH003D_index16_CCGTCC_L006_R1_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/CERC/JCH003D_R1_all.fastq &
+zcat JCH003D_index16_CCGTCC_L006_R2_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/CERC/JCH003D_R2_all.fastq &
+zcat JCH003E_index18_GTCCGC_L006_R1_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/CERC/JCH003E_R1_all.fastq &
+zcat JCH003E_index18_GTCCGC_L006_R2_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/CERC/JCH003E_R2_all.fastq &
+zcat JCH003F_index19_GTGAAA_L006_R1_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/CERC/JCH003F_R1_all.fastq &
+zcat JCH003F_index19_GTGAAA_L006_R2_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/CERC/JCH003F_R2_all.fastq &
+zcat JCH003I_index12_CTTGTA_L006_R1_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/CERC/JCH003I_R1_all.fastq &
+zcat JCH003I_index12_CTTGTA_L006_R2_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/CERC/JCH003I_R2_all.fastq 
+zcat JCH003J_index13_AGTCAA_L006_R1_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/CERC/JCH003J_R1_all.fastq 
+zcat JCH003J_index13_AGTCAA_L006_R2_*.fastq.gz > /data/James/AlleleSpecificExpression/VTP/CERC/JCH003J_R2_all.fastq 
+
+cd /data/James/AlleleSpecificExpression/VTP/CERC
+
+
+STAR_RNA.sh -1=JCH003D_R1_all.fastq -2=JCH003D_R2_all.fastq -p=JCH003D &
+STAR_RNA.sh -1=JCH003E_R1_all.fastq -2=JCH003E_R2_all.fastq -p=JCH003E &
+STAR_RNA.sh -1=JCH003F_R1_all.fastq -2=JCH003F_R2_all.fastq -p=JCH003F &
+STAR_RNA.sh -1=JCH003I_R1_all.fastq -2=JCH003I_R2_all.fastq -p=JCH003I &
+STAR_RNA.sh -1=JCH003J_R1_all.fastq -2=JCH003J_R2_all.fastq -p=JCH003J &
+
+RNA_bam.sh -b=JCH003D_final &
+RNA_bam.sh -b=JCH003E_final &
+RNA_bam.sh -b=JCH003F_final &
+RNA_bam.sh -b=JCH003I_final 
+RNA_bam.sh -b=JCH003J_final
+
+
+samtools index AG07A_final.bam
+java -Djava.io.tmpdir=strach/ -jar ~/Programs/GenomeAnalysisTK.jar -T UnifiedGenotyper -U ALLOW_N_CIGAR_READS --genotype_likelihoods_model BOTH -R ~/ReferenceGenomes/StickleMasked/stickleMasked.fa -I JCH003D_final_recalibrated.bam -I JCH003E_final_recalibrated.bam -I JCH003F_final_recalibrated.bam -I JCH003I_final_recalibrated.bam -I JCH003J_final_recalibrated.bam -I AG07A_final.bam -I /data/James/AlleleSpecificExpression/simVTP/JCH002F_final_recalibrated.bam -o CERC_VTP_RNA_final.vcf -stand_call_conf 25 -stand_emit_conf 25 
+
+diplome.sh -v=CERC_VTP_RNA_final.vcf -f=0 -m=1 -c=2 -p=JCH003D_haplopairs &
+diplome.sh -v=CERC_VTP_RNA_final.vcf -f=0 -m=1 -c=3 -p=JCH003E_haplopairs &
+diplome.sh -v=CERC_VTP_RNA_final.vcf -f=0 -m=1 -c=4 -p=JCH003F_haplopairs &
+diplome.sh -v=CERC_VTP_RNA_final.vcf -f=0 -m=1 -c=5 -p=JCH003I_haplopairs &
+diplome.sh -v=CERC_VTP_RNA_final.vcf -f=0 -m=1 -c=6 -p=JCH003J_haplopairs 
+
+mkdir JCH003D_haplopairs_STAR
+mkdir JCH003E_haplopairs_STAR
+mkdir JCH003F_haplopairs_STAR
+mkdir JCH003I_haplopairs_STAR
+mkdir JCH003J_haplopairs_STAR
+
+STAR --runMode genomeGenerate --genomeDir JCH003D_haplopairs_STAR --genomeFastaFiles JCH003D_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003E_haplopairs_STAR --genomeFastaFiles JCH003E_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003F_haplopairs_STAR --genomeFastaFiles JCH003F_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003I_haplopairs_STAR --genomeFastaFiles JCH003I_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 
+STAR --runMode genomeGenerate --genomeDir JCH003J_haplopairs_STAR --genomeFastaFiles JCH003J_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 
+
+
+STAR --genomeDir JCH003D_haplopairs_STAR --readFilesIn JCH003D_R1_all.fastq JCH003D_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003D_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003E_haplopairs_STAR --readFilesIn JCH003E_R1_all.fastq JCH003E_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003E_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003F_haplopairs_STAR --readFilesIn JCH003F_R1_all.fastq JCH003F_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003F_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003I_haplopairs_STAR --readFilesIn JCH003I_R1_all.fastq JCH003I_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003I_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003J_haplopairs_STAR --readFilesIn JCH003J_R1_all.fastq JCH003J_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003J_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+
+
+
+##ASE comparison
+
+ase_concordance('/data/James/AlleleSpecificExpression/VTP/loose_PAXB_VTP_sigASE.l','/data/James/AlleleSpecificExpression/VTP/CERC/CERC_VTP_sigASE.l')
+print up_up,up_down,down_up,down_down
+180 138 127 190
+
+
+##Lets re-do CERC with the proper Male genome
+
+java -Djava.io.tmpdir=strach/ -jar ~/Programs/GenomeAnalysisTK.jar -T UnifiedGenotyper -U ALLOW_N_CIGAR_READS --genotype_likelihoods_model BOTH -R ~/ReferenceGenomes/StickleMasked/stickleMasked.fa -I JCH003D_final_recalibrated.bam -I JCH003E_final_recalibrated.bam -I JCH003F_final_recalibrated.bam -I JCH003I_final_recalibrated.bam -I JCH003J_final_recalibrated.bam -I /data/James/Variants/JCH006A_sorted_final_dedup_recalibrated.bam -I /data/James/Variants/JCH002F_final_recalibrated.bam -o CERC_VTP_RNA_final_true.vcf -stand_call_conf 30 -stand_emit_conf 30 
+
+
+
+diplome.sh -v=CERC_VTP_RNA_final_true.vcf -f=6 -m=0 -c=1 -p=JCH003D_true &
+diplome.sh -v=CERC_VTP_RNA_final_true.vcf -f=6 -m=0 -c=2 -p=JCH003E_true &
+diplome.sh -v=CERC_VTP_RNA_final_true.vcf -f=6 -m=0 -c=3 -p=JCH003F_true &
+diplome.sh -v=CERC_VTP_RNA_final_true.vcf -f=6 -m=0 -c=4 -p=JCH003I_true &
+diplome.sh -v=CERC_VTP_RNA_final_true.vcf -f=6 -m=0 -c=5 -p=JCH003J_true 
+
+mkdir JCH003D_true_haplopairs_STAR
+mkdir JCH003E_true_haplopairs_STAR
+mkdir JCH003F_true_haplopairs_STAR
+mkdir JCH003I_true_haplopairs_STAR
+mkdir JCH003J_true_haplopairs_STAR
+
+STAR --runMode genomeGenerate --genomeDir JCH003D_true_haplopairs_STAR --genomeFastaFiles JCH003D_true_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003E_true_haplopairs_STAR --genomeFastaFiles JCH003E_true_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003F_true_haplopairs_STAR --genomeFastaFiles JCH003F_true_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003I_true_haplopairs_STAR --genomeFastaFiles JCH003I_true_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003J_true_haplopairs_STAR --genomeFastaFiles JCH003J_true_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+
+
+STAR --genomeDir JCH003D_true_haplopairs_STAR --readFilesIn JCH003D_R1_all.fastq JCH003D_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003D_true_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003E_true_haplopairs_STAR --readFilesIn JCH003E_R1_all.fastq JCH003E_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003E_true_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003F_true_haplopairs_STAR --readFilesIn JCH003F_R1_all.fastq JCH003F_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003F_true_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003I_true_haplopairs_STAR --readFilesIn JCH003I_R1_all.fastq JCH003I_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003I_true_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003J_true_haplopairs_STAR --readFilesIn JCH003J_R1_all.fastq JCH003J_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003J_true_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+
+cd /data/James/AlleleSpecificExpression/VTP/
+STAR_RNA.sh -1=JCH003A_R1_all.fastq -2=JCH003A_R2_all.fastq -p=JCH003A &
+STAR_RNA.sh -1=JCH003B_R1_all.fastq -2=JCH003B_R2_all.fastq -p=JCH003B &
+STAR_RNA.sh -1=JCH003C_R1_all.fastq -2=JCH003C_R2_all.fastq -p=JCH003C &
+STAR_RNA.sh -1=JCH003G_R1_all.fastq -2=JCH003G_R2_all.fastq -p=JCH003G &
+STAR_RNA.sh -1=JCH003H_R1_all.fastq -2=JCH003H_R2_all.fastq -p=JCH003H &
+
+cd /data/James/AlleleSpecificExpression/VTP/CERC
+
+
+STAR_RNA.sh -1=JCH003D_R1_all.fastq -2=JCH003D_R2_all.fastq -p=JCH003D &
+STAR_RNA.sh -1=JCH003E_R1_all.fastq -2=JCH003E_R2_all.fastq -p=JCH003E &
+STAR_RNA.sh -1=JCH003F_R1_all.fastq -2=JCH003F_R2_all.fastq -p=JCH003F &
+STAR_RNA.sh -1=JCH003I_R1_all.fastq -2=JCH003I_R2_all.fastq -p=JCH003I &
+STAR_RNA.sh -1=JCH003J_R1_all.fastq -2=JCH003J_R2_all.fastq.gz -p=JCH003J &
+
+
+STAR_RNA.sh -1=JCH001D_R1_all.fastq -2=JCH001D_R2_all.fastq -p=JCH001D &
+STAR_RNA.sh -1=JCH001E_R1_all.fastq -2=JCH001E_R2_all.fastq -p=JCH001E &
+STAR_RNA.sh -1=JCH001F_R1_all.fastq -2=JCH001F_R2_all.fastq -p=JCH001F &
+STAR_RNA.sh -1=JCH003K_R1_all.fastq -2=JCH003K_R2_all.fastq -p=JCH003K &
+STAR_RNA.sh -1=JCH003L_R1_all.fastq -2=JCH003L_R2_all.fastq -p=JCH003L &
+
+
+fpkm:	0.871613	1.11677	1.06447	2.78383	2.48667	3.29581	3.06408	3.3891	1.75309
+sample: 
+
+
+##################################################################################################################
+######################################Lets re-do diplome with extended filters
+##################################################################################################################
+
+
+previously was -d 5 -h 3 -q 50 (depth,max AI qual)
+lets set it to -d 6 -h 5 -q 50 (need 2 reads min per het)
+
+##PAXB
+diplome.sh -v=PAXB_VTP_RNA_final.vcf -f=0 -m=1 -c=2 -p=JCH003A_haplopairs -d=6 -h=5 -q=30 &
+diplome.sh -v=PAXB_VTP_RNA_final.vcf -f=0 -m=1 -c=3 -p=JCH003B_haplopairs -d=6 -h=5 -q=30 &
+diplome.sh -v=PAXB_VTP_RNA_final.vcf -f=0 -m=1 -c=4 -p=JCH003C_haplopairs -d=6 -h=5 -q=30 &
+diplome.sh -v=PAXB_VTP_RNA_final.vcf -f=0 -m=1 -c=5 -p=JCH003G_haplopairs -d=6 -h=5 -q=30 &
+diplome.sh -v=PAXB_VTP_RNA_final.vcf -f=0 -m=1 -c=6 -p=JCH003H_haplopairs -d=6 -h=5 -q=30 &
+
+
+STAR --runMode genomeGenerate --genomeDir JCH003A_haplopairs_STAR --genomeFastaFiles JCH003A_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003B_haplopairs_STAR --genomeFastaFiles JCH003B_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003C_haplopairs_STAR --genomeFastaFiles JCH003C_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003G_haplopairs_STAR --genomeFastaFiles JCH003G_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 
+STAR --runMode genomeGenerate --genomeDir JCH003H_haplopairs_STAR --genomeFastaFiles JCH003H_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 
+
+
+STAR --genomeDir JCH003A_haplopairs_STAR --readFilesIn JCH003A_R1_all.fastq JCH003A_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003A_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003B_haplopairs_STAR --readFilesIn JCH003B_R1_all.fastq JCH003B_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003B_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003C_haplopairs_STAR --readFilesIn JCH003C_R1_all.fastq JCH003C_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003C_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003G_haplopairs_STAR --readFilesIn JCH003G_R1_all.fastq JCH003G_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003G_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003H_haplopairs_STAR --readFilesIn JCH003H_R1_all.fastq JCH003H_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003H_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+
+
+
+##CERC
+
+diplome.sh -v=CERC_VTP_RNA_final_true.vcf -f=6 -m=0 -c=1 -p=JCH003D_true -d=6 -h=5 -q=30 &
+diplome.sh -v=CERC_VTP_RNA_final_true.vcf -f=6 -m=0 -c=2 -p=JCH003E_true -d=6 -h=5 -q=30 &
+diplome.sh -v=CERC_VTP_RNA_final_true.vcf -f=6 -m=0 -c=3 -p=JCH003F_true -d=6 -h=5 -q=30 &
+diplome.sh -v=CERC_VTP_RNA_final_true.vcf -f=6 -m=0 -c=4 -p=JCH003I_true -d=6 -h=5 -q=30 &
+diplome.sh -v=CERC_VTP_RNA_final_true.vcf -f=6 -m=0 -c=5 -p=JCH003J_true -d=6 -h=5 -q=30 &
+
+
+STAR --runMode genomeGenerate --genomeDir JCH003D_true_haplopairs_STAR --genomeFastaFiles JCH003D_true_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003E_true_haplopairs_STAR --genomeFastaFiles JCH003E_true_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003F_true_haplopairs_STAR --genomeFastaFiles JCH003F_true_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003I_true_haplopairs_STAR --genomeFastaFiles JCH003I_true_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 
+STAR --runMode genomeGenerate --genomeDir JCH003J_true_haplopairs_STAR --genomeFastaFiles JCH003J_true_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 
+
+
+STAR --genomeDir JCH003D_true_haplopairs_STAR --readFilesIn JCH003D_R1_all.fastq JCH003D_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003D_true_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003E_true_haplopairs_STAR --readFilesIn JCH003E_R1_all.fastq JCH003E_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003E_true_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003F_true_haplopairs_STAR --readFilesIn JCH003F_R1_all.fastq JCH003F_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003F_true_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003I_true_haplopairs_STAR --readFilesIn JCH003I_R1_all.fastq JCH003I_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003I_true_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003J_true_haplopairs_STAR --readFilesIn JCH003J_R1_all.fastq JCH003J_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003J_true_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+
+
+##PAXB_BS
+
+diplome.sh -v=PAXB_BS_RNA_final.vcf -f=3 -m=4 -c=0 -p=JCH001D_haplopairs -d=6 -h=5 -q=30 &
+diplome.sh -v=PAXB_BS_RNA_final.vcf -f=3 -m=4 -c=1 -p=JCH001E_haplopairs -d=6 -h=5 -q=30 &
+diplome.sh -v=PAXB_BS_RNA_final.vcf -f=3 -m=4 -c=2 -p=JCH001F_haplopairs -d=6 -h=5 -q=30 & 
+diplome.sh -v=PAXB_BS_RNA_final.vcf -f=3 -m=4 -c=5 -p=JCH003K_haplopairs -d=6 -h=5 -q=30 &
+diplome.sh -v=PAXB_BS_RNA_final.vcf -f=3 -m=4 -c=6 -p=JCH003L_haplopairs -d=6 -h=5 -q=30 & 
+
+
+STAR --runMode genomeGenerate --genomeDir JCH001D_haplopairs_STAR --genomeFastaFiles JCH001D_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH001E_haplopairs_STAR --genomeFastaFiles JCH001E_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH001F_haplopairs_STAR --genomeFastaFiles JCH001F_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003K_haplopairs_STAR --genomeFastaFiles JCH003K_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 
+STAR --runMode genomeGenerate --genomeDir JCH003L_haplopairs_STAR --genomeFastaFiles JCH003L_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 
+
+
+STAR --genomeDir JCH001D_haplopairs_STAR --readFilesIn JCH001D_R1_all.fastq JCH001D_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH001D_haplopairs_STAR_D --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH001D_haplopairs_STAR --readFilesIn JCH001E_R1_all.fastq JCH001E_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH001E_haplopairs_STAR_D --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH001D_haplopairs_STAR --readFilesIn JCH001F_R1_all.fastq JCH001F_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH001F_haplopairs_STAR_D --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH001D_haplopairs_STAR --readFilesIn JCH003K_R1_all.fastq JCH003K_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003K_haplopairs_STAR_D --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH001D_haplopairs_STAR --readFilesIn JCH003L_R1_all.fastq JCH003L_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003L_haplopairs_STAR_D --outFilterMultimapScoreRange 1 &
+
+##use /home/ctmiller/Scripts/uniqueSAMcounts.py
+
+##done, in tsv form for each id
+also have est for all
+##lets see if we can see TADs??
+
+##Lets run this on the parentals
+~/Scripts/RNA_bam.sh -b=JCH005A_final &
+~/Scripts/RNA_bam.sh -b=JCH005B_final &
+~/Scripts/RNA_bam.sh -b=JCH005C_final &
+
+
+~/Scripts/RNA_bam.sh -b=JCH005D_final &
+~/Scripts/RNA_bam.sh -b=JCH005E_final &
+~/Scripts/RNA_bam.sh -b=JCH005F_final &
+
+~/Scripts/RNA_bam.sh -b=JCH005G_final &
+~/Scripts/RNA_bam.sh -b=JCH005H_final &
+~/Scripts/RNA_bam.sh -b=JCH005I_final &
+
+java -Djava.io.tmpdir=strach/ -jar ~/Programs/GenomeAnalysisTK.jar -T UnifiedGenotyper -U ALLOW_N_CIGAR_READS --genotype_likelihoods_model BOTH -R ~/ReferenceGenomes/StickleMasked/stickleMasked.fa -I JCH005A_final_recalibrated.bam -I JCH005B_final_recalibrated.bam -I JCH005C_final_recalibrated.bam -I JCH005D_final_recalibrated.bam -I JCH005E_final_recalibrated.bam -I JCH005F_final_recalibrated.bam -I JCH005G_final_recalibrated.bam -I JCH005H_final_recalibrated.bam -I JCH005I_final_recalibrated.bam -o CERC_RABS_PAXB_parental.vcf -stand_call_conf 30 -stand_emit_conf 30 
+
+##need to fix diplome.sh to work on siblings (done?)
+diplome.sh -v=CERC_RABS_PAXB_parental.vcf -s=0,1,2 -i=0 -c=0 -p=JCH005A_haplopairs -d=6 -h=5 -q=30 &
+diplome.sh -v=CERC_RABS_PAXB_parental.vcf -s=0,1,2 -i=1 -c=1 -p=JCH005B_haplopairs -d=6 -h=5 -q=30 &
+diplome.sh -v=CERC_RABS_PAXB_parental.vcf -s=0,1,2 -i=2 -c=2 -p=JCH005C_haplopairs -d=6 -h=5 -q=30 &
+
+diplome.sh -v=CERC_RABS_PAXB_parental.vcf -s=3,4,5 -i=0 -c=3 -p=JCH005D_haplopairs -d=6 -h=5 -q=30 &
+diplome.sh -v=CERC_RABS_PAXB_parental.vcf -s=3,4,5 -i=1 -c=4 -p=JCH005E_haplopairs -d=6 -h=5 -q=30 &
+diplome.sh -v=CERC_RABS_PAXB_parental.vcf -s=3,4,5 -i=2 -c=5 -p=JCH005F_haplopairs -d=6 -h=5 -q=30 &
+
+diplome.sh -v=CERC_RABS_PAXB_parental.vcf -s=6,7,8 -i=0 -c=6 -p=JCH005G_haplopairs -d=6 -h=5 -q=30 &
+diplome.sh -v=CERC_RABS_PAXB_parental.vcf -s=6,7,8 -i=1 -c=7 -p=JCH005H_haplopairs -d=6 -h=5 -q=30 &
+diplome.sh -v=CERC_RABS_PAXB_parental.vcf -s=6,7,8 -i=2 -c=8 -p=JCH005I_haplopairs -d=6 -h=5 -q=30 &
+
+mkdir JCH005A_haplopairs_STAR
+mkdir JCH005B_haplopairs_STAR
+mkdir JCH005C_haplopairs_STAR
+mkdir JCH005D_haplopairs_STAR
+mkdir JCH005E_haplopairs_STAR
+mkdir JCH005F_haplopairs_STAR
+mkdir JCH005G_haplopairs_STAR
+mkdir JCH005H_haplopairs_STAR
+mkdir JCH005I_haplopairs_STAR
+
+STAR --runMode genomeGenerate --genomeDir JCH005A_haplopairs_STAR --genomeFastaFiles JCH005A_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH005B_haplopairs_STAR --genomeFastaFiles JCH005B_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH005C_haplopairs_STAR --genomeFastaFiles JCH005C_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH005D_haplopairs_STAR --genomeFastaFiles JCH005D_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH005E_haplopairs_STAR --genomeFastaFiles JCH005E_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH005F_haplopairs_STAR --genomeFastaFiles JCH005F_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH005G_haplopairs_STAR --genomeFastaFiles JCH005G_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH005H_haplopairs_STAR --genomeFastaFiles JCH005H_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 
+STAR --runMode genomeGenerate --genomeDir JCH005I_haplopairs_STAR --genomeFastaFiles JCH005I_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 
+
+cp /data/James/rawData/Reads/JCH005_2/JCH005*2_R*_all.fq* .
+gunzip *gz
+
+
+STAR --genomeDir JCH005A_haplopairs_STAR --readFilesIn JCH005A_2_R1_all.fq JCH005A_2_R2_all.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH005A_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH005B_haplopairs_STAR --readFilesIn JCH005B_2_R1_all.fq JCH005B_2_R2_all.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH005B_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH005C_haplopairs_STAR --readFilesIn JCH005C_2_R1_all.fq JCH005C_2_R2_all.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH005C_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+
+STAR --genomeDir JCH005D_haplopairs_STAR --readFilesIn JCH005D_2_R1_all.fq JCH005D_2_R2_all.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH005D_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH005E_haplopairs_STAR --readFilesIn JCH005E_2_R1_all.fq JCH005E_2_R2_all.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH005E_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH005F_haplopairs_STAR --readFilesIn JCH005F_2_R1_all.fq JCH005F_2_R2_all.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH005F_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+
+STAR --genomeDir JCH005G_haplopairs_STAR --readFilesIn JCH005G_2_R1_all.fq JCH005G_2_R2_all.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH005G_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH005H_haplopairs_STAR --readFilesIn JCH005H_2_R1_all.fq JCH005H_2_R2_all.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH005H_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH005I_haplopairs_STAR --readFilesIn JCH005I_2_R1_all.fq JCH005I_2_R2_all.fq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH005I_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+
+
+
+
+
+
+Looking at significant ASE genes and sorting by AIB, 
+sort -t $'\t' -g -r -k 13 PAXB_VTP_ASEpval.tsv | cut -f 1 | gedit -
+DNA binding and transcriptional reg were enriched!
+
+
+Looking at overlapping sig genes:
+##total/totalSig
+PAXB_VTP 7199 2678, .372
+PAXB_BS 8261 3537, .428
+CERC_VTP 3300 1291, .391
+##total overlapping
+tPvvPb 6263, .87
+tPvvCv 2878, .40
+tCvvPb 2931, .88
+tall   2711
+##overlapping sig
+sPvvPb 1743, .651
+sPvvCv 695, .26 (enrichment! 2878 * .372* .40 = 418) (do these go in the same direction?)
+sCvvPb 737, .22
+sall   531
+
+##shared_VTP_ids cor
+(0.085204869474350103, 4.7095940017551226e-06)
+##same/diff
+1489 1389
+##shared_VTP_sig_ids cor
+(0.14949561065404748, 7.6122823788218183e-05)
+##same/diff
+386 309
+##shared_all_ids cor
+(0.096380793934554038, 4.9645480162171771e-07)
+##same/diff
+1408 1303
+##shared_all_sig_ids cor
+(0.19655819974889305, 5.0357534688356695e-06)
+##same/diff
+296 235
+
+##PAXB_BS vs CERC VTP
+##shared_all_ids cor
+(0.10853579753833244, 1.4676892473721528e-08)
+##same/diff
+1427 1284
+##shared_all_sig_ids cor
+(0.22725351042162248, 1.1981402206130061e-07)
+##same/diff
+309 222
+
+##old result holds up - more correlated sig genes than expected by chance, but not tissue specific
+
+GO results:
+##PAXB_BS all vs sig:
+small molecule metabolic process, ion transport (lots!), metabolism
+##PAXB VTP
+caboxylic acid, metabolism, neg reg migration, transport (ACVRL1!) (VCL!) (CTNNB1!) (ATP1A1,1a3)
+##CERC VTP
+immune system, FGF7!
+
+
+ENSGACT00000022309 -3.09953567355 - SMAD4!!!
+Many of these outliers look not so real...
+
+
+zh6h73
+###################################################################
+Re-phasing with BEAGLE 4.0   ######################################
+###################################################################
+
+Attempting to map reads from multiple replicates to the same person reference resulted in much higher quality data
+BEAGLE 4.0 is supposed to be able to phase multiple trios at once (using pedigree info)
+This looks much easier to work with - input is a vcf, output is a phased VCF
+
+JCH001D JCH001E JCH001F JCH002E JCH002F JCH003K JCH003L
+make a .ped file - PAXB_BS_RNA_final.ped
+1	JCH001D	JCH002E	JCH002F
+1	JCH001E	JCH002E	JCH002F
+1	JCH001F	JCH002E	JCH002F
+1	JCH003K	JCH002E	JCH002F
+1	JCH003L	JCH002E	JCH002F
+
+java -jar ~/Programs/beagle.r1399.jar ped=PAXB_BS_RNA_final.ped gl=PAXB_BS_RNA_final.vcf out=PAXB_BS_v4 nthreads=6 phase-its=20 impute=false ibd=true
+
+~/Scripts/filterbgl4_vcf.py -c 0 -f 3 -m 4 -v PAXB_BS_v4.vcf > JCH001D_phased_v4.vcf
+/home/ctmiller/Scripts/personalTranscriptome2.py JCH001D_phased_v4.vcf > JCH001D_haplopairs.fa
+
+~/Scripts/filterbgl4_vcf.py -c 1 -f 3 -m 4 -v PAXB_BS_v4.vcf > JCH001E_phased_v4.vcf
+/home/ctmiller/Scripts/personalTranscriptome2.py JCH001E_phased_v4.vcf > JCH001E_haplopairs.fa
+
+~/Scripts/filterbgl4_vcf.py -c 2 -f 3 -m 4 -v PAXB_BS_v4.vcf > JCH001F_phased_v4.vcf
+/home/ctmiller/Scripts/personalTranscriptome2.py JCH001F_phased_v4.vcf > JCH001F_haplopairs.fa
+
+~/Scripts/filterbgl4_vcf.py -c 5 -f 3 -m 4 -v PAXB_BS_v4.vcf > JCH003K_phased_v4.vcf
+/home/ctmiller/Scripts/personalTranscriptome2.py JCH003K_phased_v4.vcf > JCH003K_haplopairs.fa
+
+~/Scripts/filterbgl4_vcf.py -c 6 -f 3 -m 4 -v PAXB_BS_v4.vcf > JCH003L_phased_v4.vcf
+/home/ctmiller/Scripts/personalTranscriptome2.py JCH003L_phased_v4.vcf > JCH003L_haplopairs.fa
+
+
+STAR --runMode genomeGenerate --genomeDir JCH001D_haplopairs_STAR --genomeFastaFiles JCH001D_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH001E_haplopairs_STAR --genomeFastaFiles JCH001E_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH001F_haplopairs_STAR --genomeFastaFiles JCH001F_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003K_haplopairs_STAR --genomeFastaFiles JCH003K_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 
+STAR --runMode genomeGenerate --genomeDir JCH003L_haplopairs_STAR --genomeFastaFiles JCH003L_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 
+
+
+STAR --genomeDir JCH001D_haplopairs_STAR --readFilesIn JCH001D_R1_all.fastq JCH001D_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH001D_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH001E_haplopairs_STAR --readFilesIn JCH001E_R1_all.fastq JCH001E_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH001E_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH001F_haplopairs_STAR --readFilesIn JCH001F_R1_all.fastq JCH001F_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH001F_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003K_haplopairs_STAR --readFilesIn JCH003K_R1_all.fastq JCH003K_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003K_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003L_haplopairs_STAR --readFilesIn JCH003L_R1_all.fastq JCH003L_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003L_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+
+
+
+JCH001D JCH001E JCH001F JCH002E JCH002F JCH003K JCH003L
+make a .ped file - PAXB_VTP_RNA_final.ped
+1	JCH003A	JCH002E	JCH002F
+1	JCH003B	JCH002E	JCH002F
+1	JCH003C	JCH002E	JCH002F
+1	JCH003G	JCH002E	JCH002F
+1	JCH003H	JCH002E	JCH002F
+
+java -jar ~/Programs/beagle.r1399.jar ped=PAXB_VTP_RNA_final.ped gt=PAXB_VTP_RNA_final.vcf out=PAXB_VTP_v4 nthreads=2 phase-its=20 impute=false ibd=true
+
+
+
+~/Scripts/filterbgl4_vcf.py -c 2 -f 0 -m 1 -v PAXB_VTP_v4.vcf > JCH003A_phased_v4.vcf
+/home/ctmiller/Scripts/personalTranscriptome2.py JCH003A_phased_v4.vcf > JCH003A_haplopairs.fa
+
+~/Scripts/filterbgl4_vcf.py -c 3 -f 0 -m 1 -v PAXB_VTP_v4.vcf > JCH003B_phased_v4.vcf
+/home/ctmiller/Scripts/personalTranscriptome2.py JCH003B_phased_v4.vcf > JCH003B_haplopairs.fa
+
+~/Scripts/filterbgl4_vcf.py -c 4 -f 0 -m 1 -v PAXB_VTP_v4.vcf > JCH003C_phased_v4.vcf
+/home/ctmiller/Scripts/personalTranscriptome2.py JCH003C_phased_v4.vcf > JCH003C_haplopairs.fa
+
+~/Scripts/filterbgl4_vcf.py -c 5 -f 0 -m 1 -v PAXB_VTP_v4.vcf > JCH003G_phased_v4.vcf
+/home/ctmiller/Scripts/personalTranscriptome2.py JCH003G_phased_v4.vcf > JCH003G_haplopairs.fa
+
+~/Scripts/filterbgl4_vcf.py -c 6 -f 0 -m 1 -v PAXB_VTP_v4.vcf > JCH003H_phased_v4.vcf
+/home/ctmiller/Scripts/personalTranscriptome2.py JCH003H_phased_v4.vcf > JCH003H_haplopairs.fa
+
+
+STAR --runMode genomeGenerate --genomeDir JCH003A_haplopairs_STAR --genomeFastaFiles JCH003A_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003B_haplopairs_STAR --genomeFastaFiles JCH003B_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003C_haplopairs_STAR --genomeFastaFiles JCH003C_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003G_haplopairs_STAR --genomeFastaFiles JCH003G_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 
+STAR --runMode genomeGenerate --genomeDir JCH003H_haplopairs_STAR --genomeFastaFiles JCH003H_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 
+
+
+STAR --genomeDir JCH003A_haplopairs_STAR --readFilesIn JCH003A_R1_all.fastq JCH003A_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003A_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003B_haplopairs_STAR --readFilesIn JCH003B_R1_all.fastq JCH003B_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003B_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003C_haplopairs_STAR --readFilesIn JCH003C_R1_all.fastq JCH003C_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003C_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003G_haplopairs_STAR --readFilesIn JCH003G_R1_all.fastq JCH003G_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003G_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003H_haplopairs_STAR --readFilesIn JCH003H_R1_all.fastq JCH003H_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003H_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+
+
+##CERC
+JCH002F JCH003D JCH003E JCH003F JCH003I JCH003J JCH006A
+make a .ped file - CERC_VTP_RNA_final.ped
+1	JCH003D	JCH006A	JCH002F
+1	JCH003E	JCH006A	JCH002F
+1	JCH003F	JCH006A	JCH002F
+1	JCH003I	JCH006A	JCH002F
+1	JCH003J	JCH006A	JCH002F
+java -jar ~/Programs/beagle.r1399.jar ped=CERC_VTP_RNA_final.ped gt=CERC_VTP_RNA_final_true.vcf out=CERC_VTP_v4 nthreads=3 phase-its=20 impute=false ibd=true
+
+
+
+gunzip CERC_VTP_v4.vcf.gz
+~/Scripts/filterbgl4_vcf.py -c 1 -f 6 -m 0 -v CERC_VTP_v4.vcf > JCH003D_phased_v4.vcf
+/home/ctmiller/Scripts/personalTranscriptome2.py JCH003D_phased_v4.vcf > JCH003D_haplopairs.fa
+
+~/Scripts/filterbgl4_vcf.py -c 2 -f 6 -m 0 -v CERC_VTP_v4.vcf > JCH003E_phased_v4.vcf
+/home/ctmiller/Scripts/personalTranscriptome2.py JCH003E_phased_v4.vcf > JCH003E_haplopairs.fa
+
+~/Scripts/filterbgl4_vcf.py -c 3 -f 6 -m 0 -v CERC_VTP_v4.vcf > JCH003F_phased_v4.vcf
+/home/ctmiller/Scripts/personalTranscriptome2.py JCH003F_phased_v4.vcf > JCH003F_haplopairs.fa
+
+~/Scripts/filterbgl4_vcf.py -c 4 -f 6 -m 0 -v CERC_VTP_v4.vcf > JCH003I_phased_v4.vcf
+/home/ctmiller/Scripts/personalTranscriptome2.py JCH003I_phased_v4.vcf > JCH003I_haplopairs.fa
+
+~/Scripts/filterbgl4_vcf.py -c 5 -f 6 -m 0 -v CERC_VTP_v4.vcf > JCH003J_phased_v4.vcf
+/home/ctmiller/Scripts/personalTranscriptome2.py JCH003J_phased_v4.vcf > JCH003J_haplopairs.fa
+
+STAR --runMode genomeGenerate --genomeDir JCH003D_true_haplopairs_STAR --genomeFastaFiles JCH003D_true_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003E_true_haplopairs_STAR --genomeFastaFiles JCH003E_true_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003F_true_haplopairs_STAR --genomeFastaFiles JCH003F_true_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir JCH003I_true_haplopairs_STAR --genomeFastaFiles JCH003I_true_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 
+STAR --runMode genomeGenerate --genomeDir JCH003J_true_haplopairs_STAR --genomeFastaFiles JCH003J_true_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 
+
+
+STAR --genomeDir JCH003D_true_haplopairs_STAR --readFilesIn JCH003D_R1_all.fastq JCH003D_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003D_true_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003E_true_haplopairs_STAR --readFilesIn JCH003E_R1_all.fastq JCH003E_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003E_true_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003F_true_haplopairs_STAR --readFilesIn JCH003F_R1_all.fastq JCH003F_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003F_true_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003I_true_haplopairs_STAR --readFilesIn JCH003I_R1_all.fastq JCH003I_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003I_true_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir JCH003J_true_haplopairs_STAR --readFilesIn JCH003J_R1_all.fastq JCH003J_R2_all.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix JCH003J_true_haplopairs_STAR --outFilterMultimapScoreRange 1 &
+
+
+
+#################################################################################################################
+FTC ASE - from CF                                   ##########################################################
+#################################################################################################################
+~/Scripts/RNA_bam.sh -f -b=LF_BR1_final &
+~/Scripts/RNA_bam.sh -f -b=LF_BR2_final &
+~/Scripts/RNA_bam.sh -f -b=LF_BR3_final &
+
+mkdir /data/James/AlleleSpecificExpression/FTC_BS
+cp LITCxFTC_20dpfGAB_BR*_clipped.fastq.gz /data/James/AlleleSpecificExpression/FTC_BS
+mv *bam /data/James/AlleleSpecificExpression/FTC_BS
+
+
+samtools index LF_BR1_final_recalibrated.bam &
+samtools index LF_BR2_final_recalibrated.bam &
+samtools index LF_BR3_final_recalibrated.bam &
+
+java -Djava.io.tmpdir=strach/ -jar ~/Programs/GenomeAnalysisTK.jar -T UnifiedGenotyper -U ALLOW_N_CIGAR_READS --genotype_likelihoods_model BOTH -R ~/ReferenceGenomes/StickleMasked/stickleMasked.fa -I LF_BR1_final_recalibrated.bam -I LF_BR2_final_recalibrated.bam -I LF_BR3_final_recalibrated.bam -I /data/James/Variants/PCAG7_final_recalibrated.bam -I /data/James/Variants/PCAG8_final_recalibrated.bam -o FTC_LITC_parental_children_combined.vcf -stand_call_conf 30 -stand_emit_conf 30 
+
+diplome.sh -v=FTC_LITC_parental_children_combined.vcf -f=3 -m=4 -c=0 -p=LF_BR1_haplopairs -d=6 -h=5 -q=30 &
+diplome.sh -v=FTC_LITC_parental_children_combined.vcf -f=3 -m=4 -c=1 -p=LF_BR2_haplopairs -d=6 -h=5 -q=30 &
+diplome.sh -v=FTC_LITC_parental_children_combined.vcf -f=3 -m=4 -c=2 -p=LF_BR3_haplopairs -d=6 -h=5 -q=30 &
+
+mkdir LF_BR1_STAR
+mkdir LF_BR2_STAR
+mkdir LF_BR3_STAR
+
+STAR --runMode genomeGenerate --genomeDir LF_BR1_STAR --genomeFastaFiles LF_BR1_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir LF_BR2_STAR --genomeFastaFiles LF_BR2_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+STAR --runMode genomeGenerate --genomeDir LF_BR3_STAR --genomeFastaFiles LF_BR3_haplopairs_haplopairs.fa --genomeSAindexNbases 10 --genomeSAsparseD 3 limitGenomeGenerateRAM 46000000000 --genomeChrBinNbits 10 &
+
+
+STAR --genomeDir LF_BR1_STAR --readFilesIn LITCxFTC_20dpfGAB_BR1_clipped.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix LF_BR1_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir LF_BR2_STAR --readFilesIn LITCxFTC_20dpfGAB_BR2_clipped.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix LF_BR2_STAR --outFilterMultimapScoreRange 1 &
+STAR --genomeDir LF_BR3_STAR --readFilesIn LITCxFTC_20dpfGAB_BR3_clipped.fastq --runThreadN 1 --outFilterMultimapNmax 1 --outFileNamePrefix LF_BR3_STAR --outFilterMultimapScoreRange 1 &
+
+
+
+print plot_cor(CERC_VTP_sig_ase,PAXB_VTP_sig_ase,XYLIM=[-7,7])
+plt.show()
+print plot_cor(PAXB_BS_sig_ase,PAXB_VTP_sig_ase,XYLIM=[-7,7])
+plt.show()
+print plot_cor(PAXB_BS_sig_ase,FTC_BS_sig_ase,XYLIM=[-7,7])
+plt.show()
+print plot_cor(PAXB_VTP_sig_ase,FTC_BS_sig_ase,XYLIM=[-7,7])
+plt.show()
+print plot_cor(CERC_VTP_sig_ase,FTC_BS_sig_ase,XYLIM=[-7,7])
+plt.show()
+
+up_up,up_down,down_up,down_down
+223 178 176 267
+(0.20746991409529011, 1.166790757923211e-09)
+up_up,up_down,down_up,down_down
+753 119 90 781
+(0.74746765426115624, 1.3861503192141902e-311)
+up_up,up_down,down_up,down_down
+139 83 84 130
+(0.29045427327486184, 6.3613414526386825e-10)
+up_up,up_down,down_up,down_down
+115 56 75 112
+(0.30523936821451192, 3.7126615055530131e-09)
+up_up,up_down,down_up,down_down
+71 62 63 74
+(0.04938644934718707, 0.41895789619717605)
+
+
+So PAXB and CERC look similar, and PAXB and FTC look similar, but FTC and CERC show no correlation
+interesting...
+
+
+
+
+
+
+
+042216 - redux!!!
+
+PAXB_VTP:
+total 11009
+no_sig 6246
+cis only 1640
+trans only 1873
+cis_trans 1250
+discordant 772
+concordant 478
+
+
+CERC_VTP:
+total 8313
+no_sig 5183
+cis only 1116
+trans only 1048
+cis_trans 966
+discordant 607
+concordant 359
+
+
+PAXB GO:
+GO:1901564 	organonitrogen compound metabolic process 	6.76E-8 	3.65E-4 	1.43 (5784,445,1450,160) 	[+] Show genes
+GO:0006518 	peptide metabolic process 	1.08E-5 	2.92E-2 	1.52 (5784,215,1450,82) 	[+] Show genes
+GO:0043604 	amide biosynthetic process 	1.18E-5 	2.13E-2 	1.53 (5784,209,1450,80) 	[+] Show genes
+GO:0043603 	cellular amide metabolic process 	1.72E-5 	2.32E-2 	1.47 (5784,250,1450,92) 	[+] Show genes
+GO:0043043 	peptide biosynthetic process 	2.46E-5 	2.66E-2 	1.53 (5784,190,1450,73) 	[+] Show genes
+GO:0006412 	translation 	4.08E-5 	3.67E-2 	1.52 (5784,186,1450,71) 	[+] Show genes
+GO:1901566 	organonitrogen compound biosynthetic process 	4.61E-5 	3.56E-2 	1.38 (5784,323,1450,112) 	[+] Show genes
+GO:0044281 	small molecule metabolic process 	1.24E-4 	8.41E-2 	1.34 (5784,354,1450,119) 	[+] Show genes
+GO:0019752 	carboxylic acid metabolic process 	4.8E-4 	2.89E-1 	1.44 (5784,186,1450,67) 	[+] Show genes
+GO:0046031 	ADP metabolic process 	6.29E-4 	3.4E-1 	2.58 (5784,17,1450,11) 	[+] Show genes
+GO:0009185 	ribonucleoside diphosphate metabolic process 	6.29E-4 	3.09E-1 	2.58 (5784,17,1450,11) 	[+] Show genes
+GO:0009179 	purine ribonucleoside diphosphate metabolic process 	6.29E-4 	2.83E-1 	2.58 (5784,17,1450,11) 	[+] Show genes
+GO:0009135 	purine nucleoside diphosphate metabolic process 	6.29E-4 	2.62E-1 	2.58 (5784,17,1450,11) 	[+] Show genes
+
+CERC GO:
+GO:0043604 	amide biosynthetic process 	3.97E-5 	1.97E-1 	1.54 (4547,197,1033,69) 	[+] Show genes
+GO:0043603 	cellular amide metabolic process 	5.41E-5 	1.34E-1 	1.49 (4547,231,1033,78) 	[+] Show genes
+GO:0006518 	peptide metabolic process 	8.22E-5 	1.36E-1 	1.51 (4547,201,1033,69) 	[+] Show genes
+GO:0043043 	peptide biosynthetic process 	1.18E-4 	1.46E-1 	1.53 (4547,178,1033,62) 	[+] Show genes
+GO:0006979 	response to oxidative stress 	1.75E-4 	1.74E-1 	3.30 (4547,12,1033,9) 	[+] Show genes
+GO:0006412 	translation 	2.48E-4 	2.06E-1 	1.51 (4547,175,1033,60) 	[+] Show genes
+GO:1901564 	organonitrogen compound metabolic process 	4.13E-4 	2.93E-1 	1.31 (4547,389,1033,116) 	[+] Show genes
+
+
+
+shared cis:
+
+total cis:
+302 257 289 377
+679 shared
+546 not
+p=0.546
+
+
+ct_labels = ['Opposing cis','Opposing trans','Concordant cis','Concordant trans']
+CERC_ct = np.array([289., 807., 326., 536.])
+np.sum(CERC_ct) = 1958.0
+opposing: 1096.0
+concordant: 862.0
+##OVERALL OPPOSING
+stats.binom_test((1096,862))
+Out[16]: 1.3520915568876617e-07
+##CIS OPPOSING
+stats.binom_test((289,326)) =  0.14653558191155347
+stats.binom_test((289,326),p=.6) =  0.00046061710328528785
+##TRANS OPPOSING
+stats.binom_test((807,536)) =  1.4429357600728905e-13
+
+
+PAXB_ct = np.array([391., 2035., 715., 1711.  ])
+np.sum(PAXB_ct) = 4852.0
+opposing: 2426.0
+concordant: 2426.0
+
+##CIS OPPOSING
+stats.binom_test((391,715)) = 1.3339534987374429e-22
+stats.binom_test((391,715),p=0.543) = 1.1388454731668544e-36
+##TRANS OPPOSING
+stats.binom_test((2035,1711)) = 1.2880084871758672e-07
+
+
+samtools flagstat JCH003D_aligned.bam > aligned_wc.txt 
+samtools flagstat JCH003E_aligned.bam >> aligned_wc.txt
+samtools flagstat JCH003F_aligned.bam >> aligned_wc.txt
+samtools flagstat JCH003I_aligned.bam >> aligned_wc.txt
+samtools flagstat JCH003J_aligned.bam >> aligned_wc.txt
+
+samtools flagstat JCH003D_final.bam > final_wc.txt 
+samtools flagstat JCH003E_final.bam >> final_wc.txt
+samtools flagstat JCH003F_final.bam >> final_wc.txt
+samtools flagstat JCH003I_final.bam >> final_wc.txt
+samtools flagstat JCH003J_final.bam >> final_wc.txt
+
+
+samtools flagstat JCH005A_final.bam > final_wc.txt 
+samtools flagstat JCH005B_final.bam >> final_wc.txt 
+samtools flagstat JCH005C_final.bam >> final_wc.txt 
+samtools flagstat JCH005D_final.bam >> final_wc.txt 
+samtools flagstat JCH005E_final.bam >> final_wc.txt 
+samtools flagstat JCH005F_final.bam >> final_wc.txt 
+samtools flagstat JCH005G_final.bam >> final_wc.txt 
+samtools flagstat JCH005H_final.bam >> final_wc.txt 
+samtools flagstat JCH005I_final.bam >> final_wc.txt 
+
+
+
+###Genomics:
+PAXB-WV JCH002D
+PAXB-JCH002E
+PAXB-WD2829 AG08F
+CERC- AG07A
+CERC-JCHAI JCH006A
+CERC-dCxR JCH006B
+LITC28 AG08D
+LITC29 AG08E
+RABS JCH002F
+
+samtools flagstat JCH002D_final.bam > conv_evo_bam.flgst
+samtools flagstat JCH002E_final.bam >> conv_evo_bam.flgst
+samtools flagstat AG08F_final.bam >> conv_evo_bam.flgst
+
+samtools flagstat AG07A_final.bam >> conv_evo_bam.flgst
+samtools flagstat JCH006A_sorted_final_dedup.bam >> conv_evo_bam.flgst
+samtools flagstat JCH006B_sorted_final_dedup.bam >> conv_evo_bam.flgst
+
+samtools flagstat AG08D_final.bam >> conv_evo_bam.flgst
+samtools flagstat AG08E_final.bam >> conv_evo_bam.flgst
+samtools flagstat JCH002F_final.bam >> conv_evo_bam.flgst
+
+
+PAXB-WV JCH002D (PAXB3)
+39144478 + 0 in total
+4525139 + 0 duplicates
+33907774 + 0 mapped (86.62%:-nan%)
+PAXB-JCH002E (PAXB2)
+32925802 + 0 in total
+4975202 + 0 duplicates
+27561555 + 0 mapped (83.71%:-nan%)
+PAXB-WD2829 AG08F  (PAXB1)
+54682734 + 0 in total
+1333950 + 0 duplicates
+41536045 + 0 mapped (75.96%:-nan%)
+CERC- AG07A (CERC1)
+43204268 + 0 in total (QC-passed reads + QC-failed reads)
+1222379 + 0 duplicates
+36319583 + 0 mapped (84.06%:-nan%)
+CERC-JCHAI JCH006A (CERC2)
+51249116 + 0 in total (QC-passed reads + QC-failed reads)
+0 + 0 duplicates
+37310922 + 0 mapped (72.80%:-nan%)
+CERC-dCxR JCH006B (CERC3)
+61773485 + 0 in total (QC-passed reads + QC-failed reads)
+0 + 0 duplicates
+34238217 + 0 mapped (55.43%:-nan%)
+LITC28 AG08D (LITC1)
+70365294 + 0 in total (QC-passed reads + QC-failed reads)
+2473080 + 0 duplicates
+58516503 + 0 mapped (83.16%:-nan%)
+LITC29 AG08E (LITC2)
+69017068 + 0 in total (QC-passed reads + QC-failed reads)
+2417384 + 0 duplicates
+58385657 + 0 mapped (84.60%:-nan%)
+RABS JCH002F
+39016218 + 0 in total (QC-passed reads + QC-failed reads)
+6236893 + 0 duplicates
+33380182 + 0 mapped (85.55%:-nan%)
+
+##PATHWAYS
+BMP
+59
+Test Ttest_1sampResult(statistic=0.86167879924020585, pvalue=0.39241286417090748)
+FGF
+60
+Test Ttest_1sampResult(statistic=-2.2655629855961683, pvalue=0.027162890905105198)
+SHH
+28
+Test Ttest_1sampResult(statistic=1.410020029227812, pvalue=0.16995016181034517)
+WNT
+75
+Test Ttest_1sampResult(statistic=2.85764545028275, pvalue=0.0055389963736385021)
+ACT
+19
+Test Ttest_1sampResult(statistic=-0.22504077250561519, pvalue=0.82448260988892186)
+TGFb
+11
+Test Ttest_1sampResult(statistic=2.341505071032659, pvalue=0.04123362380107673)
+NOTCH
+12
+Test Ttest_1sampResult(statistic=1.7675288648624359, pvalue=0.10483133543914583)
+EDA
+6
+Test Ttest_1sampResult(statistic=-0.38932623773507757, pvalue=0.71306426034336412)
+
+
